@@ -1,0 +1,15 @@
+{
+  "originHash" : "e8c5c4bb1fadd69baeaf421667a54a98eb267fa772eb80a8f5d0bfb5d99137b5",
+  "pins" : [
+    {
+      "identity" : "mpvkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mpvkit/MPVKit.git",
+      "state" : {
+        "revision" : "288527dffbc6d3e63cce147fc7b520c64a791603",
+        "version" : "1.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}
