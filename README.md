@@ -44,7 +44,7 @@ struct PlayerScreen: View {
 | Transport | `play()`, `pause()`, `togglePlayPause()`, `seek(to:precise:)`, `skip(by:)` |
 | Settings | `rate`, `volume`, `isMuted` (read/write) |
 | State | `status`, `isBuffering`, `currentTime`, `duration`, `bufferedTime`, `videoSize`, `backend` |
-| Tracks | `audioTracks`, `subtitleTracks`, `selectAudioTrack(_:)`, `selectSubtitleTrack(_:)` |
+| Tracks | `trackGroups`, `trackGroup(for:)`, `select(_:)`, `selectTrack(id:of:)`, `deselectTrack(of:)`, `trackSelection(for:)` (a SwiftUI `Binding`); per kind: `audioTracks`, `subtitleTracks`, `selectAudioTrack(_:)`, `selectSubtitleTrack(_:)` |
 | Sidecar subtitles | `addSubtitle(url:…)`, `addSubtitle(text:format:…)`, `removeSubtitle(_:)` |
 | Subtitles | `subtitleCues`: the cues due on screen right now |
 | Escape hatches | `avPlayer`, `mpvCommand(_:)`, `setMPVProperty(_:to:)` |
@@ -60,6 +60,40 @@ All properties are `@Observable`, so SwiftUI views update on their own.
 3. If the `AVPlayerItem` fails, or is not ready within `probeTimeout`, the player retries in mpv. Sidecar subtitles you added are carried over.
 
 To pin an engine, pass `.avFoundation` or `.mpv`.
+
+### Selecting audio and subtitle tracks
+
+The player describes tracks the same way for both backends. For a drop-in menu like the system player's, use:
+
+```swift
+TrackSelectionMenu(player: player)                 // Audio and Subtitles sections, with checkmarks
+TrackPicker(player: player, kind: .subtitle)       // a single picker, e.g. in a settings Form
+```
+
+To build your own UI, use `TrackGroup`:
+
+```swift
+ForEach(player.trackGroups) { group in             // only the kinds the media has
+    Section(group.title) {
+        if group.allowsEmptySelection {            // subtitles can be off; audio cannot
+            Button("Off") { player.deselectTrack(of: group.kind) }
+        }
+        ForEach(group.tracks) { track in
+            Button(group.label(for: track)) { player.select(track) }
+                .bold(track.id == group.selectedTrackID)
+        }
+    }
+}
+```
+
+What gets normalized, so both backends report the same thing for the same file:
+
+- **Language:** `MediaTrack.language` is a BCP 47 code. mpv/Matroska's `eng` and `ger` become `en` and `de`, and `und` becomes `nil`. `languageName` gives the localized name.
+- **Title:** `title` is only the title stored in the media. AVFoundation's language-derived display name is not used.
+- **Flags:** `isForced`, `isHearingImpaired` (SDH/CC) and `isAudioDescription` come from AVFoundation media characteristics or mpv's track flags.
+- **Forced twins:** AVFoundation adds a "Forced" copy of every MP4 subtitle track. These are hidden, so the list matches the tracks actually in the file. A real forced-only track stays.
+- **Labels:** `TrackGroup.label(for:)` adds "Forced", "SDH" or "AD". When two tracks would read the same, it adds the codec or a number.
+- **Automatic subtitles:** mpv only turns subtitles on automatically by language or the default flag (`subs-fallback=default`), like AVFoundation. It never picks just any track.
 
 ### Adding SRT or WebVTT subtitles
 
@@ -143,4 +177,4 @@ cd Examples/AVPlusDemo && swift run AVPlusDemo /path/to/video.mkv
 swift test
 ```
 
-The tests cover subtitle parsing, mpv track-list decoding, backend routing, and real playback through both engines using the fixtures in `Tests/AVPlusTests/Fixtures`: an H.264/AAC MP4, a VP9/Opus/SRT MKV, and an SRT file.
+The tests cover subtitle parsing, mpv track-list decoding, backend routing, and real playback through both engines using the fixtures in `Tests/AVPlusTests/Fixtures`: an H.264/AAC MP4, a VP9/Opus/SRT MKV, an SRT file, and an MP4 with English and German audio and subtitle tracks. The track selection test plays the same multi-track file through both backends and expects the same results.

@@ -49,8 +49,13 @@ public struct PlaybackError: Error, Sendable, Equatable, LocalizedError {
 }
 
 /// An audio or subtitle track, normalized across backends.
+///
+/// Both backends describe tracks the same way: `language` is a normalized BCP 47 code (`"en"`,
+/// `"pt-BR"`, never mpv's `"eng"`), `title` is the track's own title metadata (not a name derived
+/// from the language), and the accessibility flags come from AVFoundation media characteristics
+/// or mpv's track flags.
 public struct MediaTrack: Identifiable, Sendable, Hashable {
-    public enum Kind: String, Sendable, Hashable {
+    public enum Kind: String, Sendable, Hashable, CaseIterable {
         case audio
         case subtitle
     }
@@ -58,11 +63,17 @@ public struct MediaTrack: Identifiable, Sendable, Hashable {
     /// Opaque, backend-specific identifier. Pass it back to the player to select the track.
     public var id: String
     public var kind: Kind
+    /// The title stored in the media, if any.
     public var title: String?
-    /// BCP 47 / ISO 639 language code when known.
+    /// BCP 47 language code when known, e.g. `"en"` or `"zh-Hant"`.
     public var language: String?
     public var isDefault: Bool
+    /// Subtitles that only cover foreign-language dialogue or signs.
     public var isForced: Bool
+    /// Subtitles for the deaf and hard of hearing (SDH) or closed captions.
+    public var isHearingImpaired: Bool
+    /// Audio description for blind and low-vision viewers.
+    public var isAudioDescription: Bool
     /// `true` for subtitles added with ``AVPlusPlayer/addSubtitle(url:title:language:select:)``.
     public var isExternal: Bool
     public var codec: String?
@@ -74,22 +85,31 @@ public struct MediaTrack: Identifiable, Sendable, Hashable {
         language: String? = nil,
         isDefault: Bool = false,
         isForced: Bool = false,
+        isHearingImpaired: Bool = false,
+        isAudioDescription: Bool = false,
         isExternal: Bool = false,
         codec: String? = nil
     ) {
         self.id = id
         self.kind = kind
-        self.title = title
-        self.language = language
+        self.title = title.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+        self.language = Self.normalizedLanguageCode(language)
         self.isDefault = isDefault
         self.isForced = isForced
+        self.isHearingImpaired = isHearingImpaired
+        self.isAudioDescription = isAudioDescription
         self.isExternal = isExternal
         self.codec = codec
     }
 
-    /// A human readable label built from the title and language.
+    /// The language's name in the current locale, e.g. "German" for `"de"`.
+    public var languageName: String? {
+        language.flatMap { Locale.current.localizedString(forIdentifier: $0) ?? Locale.current.localizedString(forLanguageCode: $0) }
+    }
+
+    /// A human readable label built from the title and language. ``TrackGroup/label(for:)`` adds
+    /// qualifiers (Forced, SDH) and tells apart tracks that would otherwise look the same.
     public var displayName: String {
-        let languageName = language.flatMap { Locale.current.localizedString(forLanguageCode: $0) }
         switch (title, languageName) {
         case let (title?, language?) where !title.localizedCaseInsensitiveContains(language):
             return "\(title) (\(language))"
@@ -101,6 +121,29 @@ public struct MediaTrack: Identifiable, Sendable, Hashable {
             return "Track \(id)"
         }
     }
+
+    /// Normalizes ISO 639-1/-2 codes and BCP 47 tags: `"eng"` → `"en"`, `"ger"` → `"de"`,
+    /// `"en_US"` → `"en-US"`. Undetermined codes (`"und"`) become `nil`.
+    public static func normalizedLanguageCode(_ code: String?) -> String? {
+        guard let code = code?.trimmingCharacters(in: .whitespaces), !code.isEmpty else { return nil }
+        var subtags = code.replacingOccurrences(of: "_", with: "-").split(separator: "-").map(String.init)
+        var primary = subtags[0].lowercased()
+        guard !["und", "mis", "mul", "zxx", "qaa"].contains(primary) else { return nil }
+        primary = bibliographicLanguageCodes[primary] ?? primary
+        if primary.count == 3, let alpha2 = Locale.Language(identifier: primary).languageCode?.identifier(.alpha2) {
+            primary = alpha2
+        }
+        subtags[0] = primary
+        return subtags.joined(separator: "-")
+    }
+
+    /// ISO 639-2/B codes (common in Matroska) that Foundation does not map; mapped to 639-2/T.
+    private static let bibliographicLanguageCodes: [String: String] = [
+        "alb": "sqi", "arm": "hye", "baq": "eus", "bur": "mya", "chi": "zho", "cze": "ces",
+        "dut": "nld", "fre": "fra", "geo": "kat", "ger": "deu", "gre": "ell", "ice": "isl",
+        "mac": "mkd", "mao": "mri", "may": "msa", "per": "fas", "rum": "ron", "slo": "slk",
+        "tib": "bod", "wel": "cym",
+    ]
 }
 
 /// A subtitle line that is currently due for display.

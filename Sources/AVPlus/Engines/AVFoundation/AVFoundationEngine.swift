@@ -329,8 +329,11 @@ final class AVFoundationEngine: PlaybackEngine {
 
         audioGroup = audible
         legibleGroup = legible
-        (audioTracks, audioOptions) = Self.tracks(in: audible, kind: .audio, prefix: "audio")
-        (embeddedSubtitleTracks, legibleOptions) = Self.tracks(in: legible, kind: .subtitle, prefix: "subtitle")
+        let audio = await Self.tracks(in: audible, kind: .audio, prefix: "audio")
+        let subtitles = await Self.tracks(in: legible, kind: .subtitle, prefix: "subtitle")
+        guard item === self.item else { return }
+        (audioTracks, audioOptions) = audio
+        (embeddedSubtitleTracks, legibleOptions) = subtitles
         emitTracks()
 
         let selection = item.currentMediaSelection
@@ -348,25 +351,48 @@ final class AVFoundationEngine: PlaybackEngine {
         in group: AVMediaSelectionGroup?,
         kind: MediaTrack.Kind,
         prefix: String
-    ) -> ([MediaTrack], [String: AVMediaSelectionOption]) {
+    ) async -> ([MediaTrack], [String: AVMediaSelectionOption]) {
         guard let group else { return ([], [:]) }
         var tracks: [MediaTrack] = []
         var options: [String: AVMediaSelectionOption] = [:]
-        for (index, option) in group.options.enumerated() {
+        for (index, option) in group.options.enumerated() where !isSynthesizedForcedOption(option, in: group) {
             let id = "\(prefix)-\(index)"
             options[id] = option
             tracks.append(MediaTrack(
                 id: id,
                 kind: kind,
-                title: option.displayName,
-                language: option.extendedLanguageTag ?? option.locale?.language.languageCode?.identifier,
+                // `displayName` is derived from the language; only a real title is a title.
+                title: await title(of: option),
+                language: option.extendedLanguageTag ?? option.locale?.identifier,
                 isDefault: group.defaultOption == option,
                 isForced: option.hasMediaCharacteristic(.containsOnlyForcedSubtitles),
+                isHearingImpaired: option.mediaType == .closedCaption
+                    || option.hasMediaCharacteristic(.describesMusicAndSoundForAccessibility),
+                isAudioDescription: option.hasMediaCharacteristic(.describesVideoForAccessibility),
                 isExternal: false,
-                codec: option.mediaType.rawValue
+                codec: option.mediaType == .closedCaption ? "cea-608" : nil
             ))
         }
         return (tracks, options)
+    }
+
+    /// AVFoundation adds a forced-only twin for every full subtitle track (it shows only the
+    /// forced samples). mpv lists tracks as stored, so hide twins of a full track in the same
+    /// language. A forced track without a full counterpart stays.
+    private static func isSynthesizedForcedOption(_ option: AVMediaSelectionOption, in group: AVMediaSelectionGroup) -> Bool {
+        guard option.hasMediaCharacteristic(.containsOnlyForcedSubtitles) else { return false }
+        return group.options.contains { other in
+            other !== option
+                && !other.hasMediaCharacteristic(.containsOnlyForcedSubtitles)
+                && other.extendedLanguageTag == option.extendedLanguageTag
+                && other.mediaType == option.mediaType
+        }
+    }
+
+    private static func title(of option: AVMediaSelectionOption) async -> String? {
+        let items = AVMetadataItem.metadataItems(from: option.commonMetadata, filteredByIdentifier: .commonIdentifierTitle)
+        guard let item = items.first else { return nil }
+        return try? await item.load(.stringValue)
     }
 
     private func emitTracks() {

@@ -12,6 +12,14 @@ struct MPVTrackList: Sendable {
         var forced: Bool?
         var external: Bool?
         var selected: Bool?
+        var hearingImpaired: Bool?
+        var visualImpaired: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case id, type, title, lang, codec, `default`, forced, external, selected
+            case hearingImpaired = "hearing-impaired"
+            case visualImpaired = "visual-impaired"
+        }
     }
 
     var entries: [Entry]
@@ -35,6 +43,8 @@ struct MPVTrackList: Sendable {
                 language: entry.lang,
                 isDefault: entry.default ?? false,
                 isForced: entry.forced ?? false,
+                isHearingImpaired: entry.hearingImpaired ?? false,
+                isAudioDescription: entry.visualImpaired ?? false,
                 isExternal: entry.external ?? false,
                 codec: entry.codec
             )

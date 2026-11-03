@@ -105,16 +105,55 @@ struct MPVTrackListTests {
          {"id":1,"type":"audio","lang":"eng","title":"Main","default":true,"selected":true,"codec":"opus"},
          {"id":2,"type":"audio","lang":"deu","selected":false},
          {"id":1,"type":"sub","lang":"eng","forced":false,"external":false,"selected":true,"codec":"subrip"},
-         {"id":2,"type":"sub","title":"Signs","forced":true,"external":true,"selected":false}]
+         {"id":2,"type":"sub","title":"Signs","forced":true,"external":true,"selected":false,"hearing-impaired":true}]
         """
         let list = try MPVTrackList(json: json)
 
         #expect(list.audioTracks.map(\.id) == ["1", "2"])
         #expect(list.audioTracks.first?.isDefault == true)
-        #expect(list.subtitleTracks.map(\.language) == ["eng", nil])
+        #expect(list.subtitleTracks.map(\.language) == ["en", nil])
         #expect(list.subtitleTracks.last?.isForced == true)
         #expect(list.subtitleTracks.last?.isExternal == true)
+        #expect(list.subtitleTracks.last?.isHearingImpaired == true)
         #expect(list.selectedAudioID == "1")
         #expect(list.selectedSubtitleID == "1")
+    }
+}
+
+struct TrackSelectionTests {
+    @Test func normalizesLanguageCodes() {
+        let cases: [String?: String?] = [
+            "eng": "en", "ger": "de", "deu": "de", "fre": "fr", "chi": "zh", "jpn": "ja",
+            "en_US": "en-US", "pt-BR": "pt-BR", "zh-Hant": "zh-Hant", "und": nil, "": nil, nil: nil,
+        ]
+        for (input, expected) in cases {
+            #expect(MediaTrack.normalizedLanguageCode(input) == expected, "\(input ?? "nil")")
+        }
+    }
+
+    @Test func labelsTracksUnambiguously() {
+        let group = TrackGroup(kind: .subtitle, tracks: [
+            MediaTrack(id: "1", kind: .subtitle, language: "eng", codec: "subrip"),
+            MediaTrack(id: "2", kind: .subtitle, language: "eng", codec: "ass"),
+            MediaTrack(id: "3", kind: .subtitle, language: "en", isForced: true),
+            MediaTrack(id: "4", kind: .subtitle, title: "Commentary", language: "en", isHearingImpaired: true),
+            MediaTrack(id: "5", kind: .subtitle),
+            MediaTrack(id: "6", kind: .subtitle, title: "Signs"),
+            MediaTrack(id: "7", kind: .subtitle, title: "Signs"),
+        ], selectedTrackID: "3")
+
+        let english = Locale.current.localizedString(forIdentifier: "en")!
+        #expect(group.tracks.map(group.label(for:)) == [
+            "\(english) – SUBRIP",
+            "\(english) – ASS",
+            "\(english) (Forced)",
+            "Commentary (\(english)) (SDH)",
+            "Track 5",
+            "Signs 1",
+            "Signs 2",
+        ])
+        #expect(group.selectedTrack?.isForced == true)
+        #expect(group.allowsEmptySelection)
+        #expect(!TrackGroup(kind: .audio, tracks: [], selectedTrackID: nil).allowsEmptySelection)
     }
 }

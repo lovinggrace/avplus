@@ -78,7 +78,7 @@ struct PlaybackTests {
         #expect(player.backend == .mpv)
         #expect(await waitUntil { player.status == .playing })
         #expect(await waitUntil { !player.subtitleTracks.isEmpty })
-        let english = try #require(player.subtitleTracks.first { $0.language == "eng" })
+        let english = try #require(player.subtitleTracks.first { $0.language == "en" })
         player.selectSubtitleTrack(english)
 
         #expect(await waitUntil { player.subtitleCues.first?.text == "Hello world" })
@@ -136,6 +136,46 @@ struct PlaybackTests {
         #expect(player.selectedSubtitleTrackID == nil)
         #expect(player.subtitleCues.isEmpty)
         #expect(await waitUntil { player.subtitleTracks.filter(\.isExternal).map(\.id) == [srtTrack.id] })
+        player.stop()
+    }
+
+    /// The same file through both backends has to produce the same tracks, labels and behavior.
+    @Test(arguments: [PlaybackBackend.avFoundation, .mpv])
+    func selectsTracksUniformly(backend: PlaybackBackend) async throws {
+        let selection: BackendSelection = backend == .mpv ? .mpv : .avFoundation
+        let player = AVPlusPlayer(configuration: PlayerConfiguration(backend: selection, mpvOptions: headlessMPV))
+        player.isMuted = true
+        await player.load(try fixture("multitrack.mp4"))
+        #expect(await waitUntil { player.status == .playing })
+        #expect(await waitUntil { player.trackGroups.count == 2 })
+        player.pause()
+
+        let audio = player.trackGroup(for: .audio)
+        let subtitles = player.trackGroup(for: .subtitle)
+        #expect(audio.tracks.map(\.language) == ["en", "de"])
+        #expect(subtitles.tracks.map(\.language) == ["en", "de"])
+        let names = ["en", "de"].map { Locale.current.localizedString(forIdentifier: $0)! }
+        #expect(audio.tracks.map(audio.label(for:)) == names)
+        #expect(subtitles.tracks.map(subtitles.label(for:)) == names)
+        #expect(audio.selectedTrack?.language == "en")
+
+        let german = try #require(subtitles.tracks.last)
+        player.select(german)
+        #expect(await waitUntil { player.subtitleCues.first?.text == "Hallo Welt" })
+        #expect(player.selectedTrack(of: .subtitle)?.id == german.id)
+
+        player.selectTrack(id: audio.tracks.last?.id, of: .audio)
+        #expect(await waitUntil { player.selectedTrack(of: .audio)?.language == "de" })
+
+        player.deselectTrack(of: .subtitle)
+        #expect(player.selectedTrack(of: .subtitle) == nil)
+        #expect(player.subtitleCues.isEmpty)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(player.subtitleCues.isEmpty)
+
+        // Audio cannot be switched off.
+        player.deselectTrack(of: .audio)
+        #expect(player.selectedTrack(of: .audio)?.language == "de")
         player.stop()
     }
 

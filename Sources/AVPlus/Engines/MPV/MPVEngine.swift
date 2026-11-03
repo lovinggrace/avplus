@@ -41,7 +41,8 @@ final class MPVEngine: PlaybackEngine {
             ("input-vo-keyboard", "no"),
             ("input-media-keys", "no"),
             ("subs-match-os-language", "yes"),
-            ("subs-fallback", "yes"),
+            // Like AVFoundation: pick subtitles by language or the default flag, never just any track.
+            ("subs-fallback", "default"),
             // AVFoundation never picks up `movie.srt` next to `movie.mp4`; match it so both backends
             // only show sidecar subtitles added through `addSubtitle`. Override via `mpvOptions`.
             ("sub-auto", "no"),

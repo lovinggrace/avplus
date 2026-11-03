@@ -100,21 +100,11 @@ struct PlayerScreen: View {
             }
 
             HStack {
-                Picker("Audio", selection: Binding(
-                    get: { player.selectedAudioTrackID },
-                    set: { id in player.selectAudioTrack(player.audioTracks.first { $0.id == id }) }
-                )) {
-                    ForEach(player.audioTracks) { Text($0.displayName).tag(Optional($0.id)) }
-                }
-                .disabled(player.audioTracks.isEmpty)
-
-                Picker("Subtitles", selection: Binding(
-                    get: { player.selectedSubtitleTrackID },
-                    set: { id in player.selectSubtitleTrack(player.subtitleTracks.first { $0.id == id }) }
-                )) {
-                    Text("Off").tag(String?.none)
-                    ForEach(player.subtitleTracks) { Text($0.displayName).tag(Optional($0.id)) }
-                }
+                TrackPicker(player: player, kind: .audio)
+                TrackPicker(player: player, kind: .subtitle)
+                TrackSelectionMenu(player: player)
+                    .labelStyle(.iconOnly)
+                    .fixedSize()
 
                 Picker("Speed", selection: $player.rate) {
                     ForEach([0.5, 1, 1.5, 2] as [Float], id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
