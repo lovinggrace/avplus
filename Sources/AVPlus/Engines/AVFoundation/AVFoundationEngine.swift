@@ -33,6 +33,7 @@ final class AVFoundationEngine: PlaybackEngine {
 
     private var sidecars: [(track: MediaTrack, document: SubtitleDocument)] = []
     private var activeSidecarID: String?
+    private var nextSidecarNumber = 0
     private var visibleSidecarCueIDs: [UUID] = []
 
     /// - Parameter readyTimeout: Report a failure if the item is not ready by then. AVPlayer can
@@ -138,21 +139,39 @@ final class AVFoundationEngine: PlaybackEngine {
         updateSidecarCues(at: player.currentTime().seconds)
     }
 
-    func addExternalSubtitle(url: URL, title: String?, language: String?, select: Bool) async throws {
-        let document = try await SubtitleDocument.load(from: url)
+    func addExternalSubtitle(_ source: SubtitleSource, title: String, language: String?, select: Bool) async throws -> String? {
+        let document = switch source {
+        case let .url(url): try await SubtitleDocument.load(from: url)
+        case let .text(text, format): SubtitleDocument(contents: text, format: format)
+        }
+        guard !document.cues.isEmpty else { throw SubtitleDocument.ParseError.noCues }
+
+        nextSidecarNumber += 1
         let track = MediaTrack(
-            id: "external-\(sidecars.count)",
+            id: "external-\(nextSidecarNumber)",
             kind: .subtitle,
-            title: title ?? url.deletingPathExtension().lastPathComponent,
+            title: title,
             language: language,
             isExternal: true,
-            codec: url.pathExtension.lowercased()
+            codec: source.codec
         )
         sidecars.append((track, document))
         emitTracks()
         if select {
             selectSubtitleTrack(id: track.id)
         }
+        return track.id
+    }
+
+    func removeExternalSubtitle(id: String) {
+        sidecars.removeAll { $0.track.id == id }
+        if activeSidecarID == id {
+            activeSidecarID = nil
+            visibleSidecarCueIDs = []
+            emit(.subtitleCues([]))
+            emit(.selectedSubtitleTrack(nil))
+        }
+        emitTracks()
     }
 
     func shutdown() {

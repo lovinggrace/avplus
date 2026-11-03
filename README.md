@@ -44,7 +44,8 @@ struct PlayerScreen: View {
 | Transport | `play()`, `pause()`, `togglePlayPause()`, `seek(to:precise:)`, `skip(by:)` |
 | Settings | `rate`, `volume`, `isMuted` (read/write) |
 | State | `status`, `isBuffering`, `currentTime`, `duration`, `bufferedTime`, `videoSize`, `backend` |
-| Tracks | `audioTracks`, `subtitleTracks`, `selectAudioTrack(_:)`, `selectSubtitleTrack(_:)`, `addSubtitle(url:title:language:select:)` |
+| Tracks | `audioTracks`, `subtitleTracks`, `selectAudioTrack(_:)`, `selectSubtitleTrack(_:)` |
+| Sidecar subtitles | `addSubtitle(url:…)`, `addSubtitle(text:format:…)`, `removeSubtitle(_:)` |
 | Subtitles | `subtitleCues`: the cues due on screen right now |
 | Escape hatches | `avPlayer`, `mpvCommand(_:)`, `setMPVProperty(_:to:)` |
 
@@ -59,6 +60,27 @@ All properties are `@Observable`, so SwiftUI views update on their own.
 3. If the `AVPlayerItem` fails, or is not ready within `probeTimeout`, the player retries in mpv. Sidecar subtitles you added are carried over.
 
 To pin an engine, pass `.avFoundation` or `.mpv`.
+
+### Adding SRT or WebVTT subtitles
+
+You can add subtitles to the media that's loaded at any point: before it starts, while it plays, or after it has ended. They work with both backends:
+
+```swift
+// A file on disk or on a server. If the URL has no .srt/.vtt extension, the format is detected from the content.
+let english = try await player.addSubtitle(url: subtitleURL, title: "English", language: "en")
+
+// Text you already have, e.g. from an API. The format is detected when `format` is nil.
+let german = try await player.addSubtitle(text: vttString, format: .webVTT, language: "de", select: false)
+
+player.selectSubtitleTrack(german)   // switch between tracks
+player.removeSubtitle(english!)      // remove an added track
+```
+
+- New tracks appear in `subtitleTracks` with `isExternal == true`, and are selected unless you pass `select: false`.
+- AVFoundation can't load sidecar subtitle files, so AVPlus parses SRT/WebVTT itself and keeps the cues in sync with playback. mpv loads them natively. In-memory text is handed to mpv through a temporary file.
+- Both backends support the common inline styling: `<i>`, `<b>`, `<u>`, `<font color>`, WebVTT `<c>`/`<v>` and `{\i1}`-style overrides.
+- In a sandboxed app, read files the user picked while you hold security-scoped access, then pass the text with `addSubtitle(text:)`. mpv opens files lazily, after that access may have ended. The demo app shows this.
+- mpv's automatic loading of `movie.srt` next to `movie.mkv` is off (`sub-auto=no`), matching AVFoundation. To turn it back on, pass `mpvOptions: ["sub-auto": "exact"]`.
 
 ### Rendering subtitles yourself
 

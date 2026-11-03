@@ -93,6 +93,14 @@ final class MPVHandle: @unchecked Sendable {
         }
     }
 
+    func string(_ name: String) -> String? {
+        withPointer { pointer -> String? in
+            guard let cString = mpv_get_property_string(pointer, name) else { return nil }
+            defer { mpv_free(cString) }
+            return String(cString: cString)
+        } ?? nil
+    }
+
     func double(_ name: String) -> Double? {
         withPointer { Self.double(name, pointer: $0) } ?? nil
     }

@@ -20,6 +20,7 @@ final class MPVEngine: PlaybackEngine {
     private var isReady = false
     /// `sub-add` only works once a file is loaded.
     private var pendingSubtitleCommands: [[String]] = []
+    private var temporarySubtitleFiles: [URL] = []
     private var isPaused = true
     private var isAtEnd = false
     private var videoWidth: Int64?
@@ -41,6 +42,9 @@ final class MPVEngine: PlaybackEngine {
             ("input-media-keys", "no"),
             ("subs-match-os-language", "yes"),
             ("subs-fallback", "yes"),
+            // AVFoundation never picks up `movie.srt` next to `movie.mp4`; match it so both backends
+            // only show sidecar subtitles added through `addSubtitle`. Override via `mpvOptions`.
+            ("sub-auto", "no"),
             ("sub-visibility", configuration.subtitleRendering == .native ? "yes" : "no"),
         ]
         options += configuration.mpvOptions.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
@@ -83,6 +87,7 @@ final class MPVEngine: PlaybackEngine {
         isReady = false
         isAtEnd = false
         pendingSubtitleCommands = []
+        removeTemporarySubtitleFiles()
         handle.set("pause", flag: !autoplay)
         let target = url.isFileURL ? url.path : url.absoluteString
         var command = ["loadfile", target, "replace"]
@@ -136,23 +141,51 @@ final class MPVEngine: PlaybackEngine {
         if id == nil { emit(.subtitleCues([])) }
     }
 
-    func addExternalSubtitle(url: URL, title: String?, language: String?, select: Bool) async throws {
-        let target = url.isFileURL ? url.path : url.absoluteString
-        var command = ["sub-add", target, select ? "select" : "auto"]
-        if title != nil || language != nil {
-            command.append(title ?? url.deletingPathExtension().lastPathComponent)
+    func addExternalSubtitle(_ source: SubtitleSource, title: String, language: String?, select: Bool) async throws -> String? {
+        let target: String
+        switch source {
+        case let .url(url):
+            target = url.isFileURL ? url.path : url.absoluteString
+        case let .text(text, format):
+            target = try writeTemporarySubtitle(text, format: format).path
         }
+        var command = ["sub-add", target, select ? "select" : "auto", title]
         if let language {
             command.append(language)
         }
         guard isReady else {
             pendingSubtitleCommands.append(command)
-            return
+            return nil
         }
+        // `sub-add` loads the file synchronously, so the new track is in `track-list` afterwards.
         let status = handle.command(command)
         if status < 0 {
             throw PlaybackError("Could not add subtitle: \(Self.describe(status))", backend: .mpv)
         }
+        let tracks = handle.string("track-list").flatMap { try? MPVTrackList(json: $0) }
+        let newest = tracks?.entries.filter { $0.type == "sub" && $0.external == true }.map(\.id).max()
+        return newest.map(String.init)
+    }
+
+    func removeExternalSubtitle(id: String) {
+        handle.command(["sub-remove", id])
+    }
+
+    /// mpv only reads subtitles from files or URLs, so in-memory text goes through a temp file.
+    private func writeTemporarySubtitle(_ text: String, format: SubtitleDocument.Format) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "AVPlus-Subtitles", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appending(path: "\(UUID().uuidString).\(format.fileExtension)")
+        try Data(text.utf8).write(to: file)
+        temporarySubtitleFiles.append(file)
+        return file
+    }
+
+    private func removeTemporarySubtitleFiles() {
+        for file in temporarySubtitleFiles {
+            try? FileManager.default.removeItem(at: file)
+        }
+        temporarySubtitleFiles = []
     }
 
     /// Runs a raw mpv command, e.g. `["cycle", "deinterlace"]`. Returns the mpv status code.
@@ -176,6 +209,7 @@ final class MPVEngine: PlaybackEngine {
         lifecycleCancellables.removeAll()
         videoLayer.removeFromSuperlayer()
         handle.destroy(keepAlive: videoLayer)
+        removeTemporarySubtitleFiles()
     }
 
     // MARK: - Events

@@ -98,6 +98,55 @@ struct PlaybackTests {
         player.stop()
     }
 
+    /// SRT and WebVTT added while the video is already playing, from text and from a file.
+    @Test(arguments: [PlaybackBackend.avFoundation, .mpv])
+    func addsAndRemovesSubtitlesDuringPlayback(backend: PlaybackBackend) async throws {
+        let selection: BackendSelection = backend == .mpv ? .mpv : .avFoundation
+        let player = AVPlusPlayer(configuration: PlayerConfiguration(backend: selection, mpvOptions: headlessMPV))
+        player.isMuted = true
+        await player.load(try fixture("sample.mp4"))
+        #expect(await waitUntil { player.status == .playing })
+        #expect(player.backend == backend)
+        player.pause()
+        #expect(await waitUntil { player.status == .paused })
+
+        let webVTT = """
+        WEBVTT
+
+        00:00.000 --> 00:03.000
+        <i>Added</i> while playing
+        """
+        let vttTrack = try #require(try await player.addSubtitle(text: webVTT, language: "de"))
+        #expect(vttTrack.isExternal)
+        #expect(await waitUntil { player.subtitleCues.first?.text == "Added while playing" })
+        #expect(await waitUntil { player.subtitleTracks.contains { $0.id == vttTrack.id } })
+        #expect(player.selectedSubtitleTrackID == vttTrack.id)
+
+        let srtTrack = try #require(try await player.addSubtitle(url: try fixture("sample.srt"), title: "English", language: "en"))
+        #expect(srtTrack.id != vttTrack.id)
+        await player.seek(to: 2, precise: true)
+        #expect(await waitUntil { player.subtitleCues.first?.text == "Second line" })
+        #expect(await waitUntil { player.subtitleTracks.filter(\.isExternal).count == 2 })
+
+        // Switching back to the first added track.
+        player.selectSubtitleTrack(vttTrack)
+        #expect(await waitUntil { player.subtitleCues.first?.text == "Added while playing" })
+
+        player.removeSubtitle(vttTrack)
+        #expect(player.selectedSubtitleTrackID == nil)
+        #expect(player.subtitleCues.isEmpty)
+        #expect(await waitUntil { player.subtitleTracks.filter(\.isExternal).map(\.id) == [srtTrack.id] })
+        player.stop()
+    }
+
+    @Test func rejectsUnrecognizedSubtitleText() async throws {
+        let player = AVPlusPlayer(configuration: PlayerConfiguration(mpvOptions: headlessMPV))
+        await #expect(throws: (any Error).self) { try await player.addSubtitle(text: "WEBVTT\n") }
+        await player.load(try fixture("sample.mp4"), autoplay: false)
+        await #expect(throws: SubtitleDocument.ParseError.self) { try await player.addSubtitle(text: "just words") }
+        player.stop()
+    }
+
     @Test func mpvReportsMissingFiles() async throws {
         let player = AVPlusPlayer(configuration: PlayerConfiguration(backend: .mpv, mpvOptions: headlessMPV))
         await player.load(URL(filePath: "/nonexistent/\(UUID().uuidString).mkv"))

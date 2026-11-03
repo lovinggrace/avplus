@@ -28,8 +28,21 @@ struct PlayerScreen: View {
     let initialURL: URL?
 
     @State private var player = AVPlusPlayer()
-    @State private var isImporting = false
+    @State private var importing: ImportKind?
     @State private var scrubTime: Double?
+    @State private var errorMessage: String?
+
+    private enum ImportKind {
+        case media
+        case subtitles
+
+        var contentTypes: [UTType] {
+            switch self {
+            case .media: [.movie, .audiovisualContent, .data]
+            case .subtitles: ["srt", "vtt"].compactMap { UTType(filenameExtension: $0) } + [.plainText]
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,9 +53,23 @@ struct PlayerScreen: View {
         .task {
             if let initialURL { await player.load(initialURL) }
         }
-        .fileImporter(isPresented: $isImporting, allowedContentTypes: [.movie, .audiovisualContent, .data]) { result in
+        .fileImporter(
+            isPresented: Binding(get: { importing != nil }, set: { if !$0 { importing = nil } }),
+            allowedContentTypes: importing?.contentTypes ?? []
+        ) { [importing] result in
             guard case let .success(url) = result else { return }
-            Task { await player.load(url) }
+            Task {
+                switch importing {
+                case .media: await player.load(url)
+                case .subtitles: await addSubtitles(from: url)
+                case nil: break
+                }
+            }
+        }
+        .alert("Could not add subtitles", isPresented: Binding(
+            get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+        )) {} message: {
+            Text(errorMessage ?? "")
         }
     }
 
@@ -94,10 +121,37 @@ struct PlayerScreen: View {
                 }
                 .frame(width: 140)
 
+                Button("Remove", systemImage: "minus.circle") {
+                    if let track = player.selectedSubtitleTrack { player.removeSubtitle(track) }
+                }
+                .labelStyle(.iconOnly)
+                .disabled(player.selectedSubtitleTrack?.isExternal != true)
+                .help("Remove the selected added subtitle track")
+
                 Spacer()
                 Text(statusText).foregroundStyle(.secondary)
-                Button("Open…") { isImporting = true }
+                Button("Add Subtitles…") { importing = .subtitles }
+                    .disabled(player.backend == nil)
+                Button("Open…") { importing = .media }
             }
+        }
+    }
+
+    /// Reads the file while the sandbox grants access, then hands the text to the player, so it
+    /// keeps working after the security scope ends (mpv reads files lazily).
+    private func addSubtitles(from url: URL) async {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            let text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
+            try await player.addSubtitle(
+                text: text,
+                format: SubtitleDocument.Format(pathExtension: url.pathExtension),
+                title: url.deletingPathExtension().lastPathComponent
+            )
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 

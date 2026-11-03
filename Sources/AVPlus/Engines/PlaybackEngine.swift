@@ -21,6 +21,19 @@ enum EngineEvent: Sendable {
     case failed(PlaybackError, beforeReady: Bool)
 }
 
+/// Where a sidecar subtitle comes from.
+enum SubtitleSource: Sendable {
+    case url(URL)
+    case text(String, format: SubtitleDocument.Format)
+
+    var codec: String {
+        switch self {
+        case let .url(url): url.pathExtension.lowercased()
+        case let .text(_, format): format.fileExtension
+        }
+    }
+}
+
 /// Common surface implemented by every backend. All calls happen on the main actor.
 @MainActor
 protocol PlaybackEngine: AnyObject {
@@ -37,7 +50,11 @@ protocol PlaybackEngine: AnyObject {
     func setMuted(_ muted: Bool)
     func selectAudioTrack(id: String?)
     func selectSubtitleTrack(id: String?)
-    func addExternalSubtitle(url: URL, title: String?, language: String?, select: Bool) async throws
+    /// Adds a sidecar subtitle track and returns its ID, or `nil` if the engine had to defer it
+    /// until the media is loaded (the track then shows up in a later `.tracks` event).
+    func addExternalSubtitle(_ source: SubtitleSource, title: String, language: String?, select: Bool) async throws -> String?
+    /// Removes a track added with `addExternalSubtitle`.
+    func removeExternalSubtitle(id: String)
     /// Releases all resources. The engine is unusable afterwards.
     func shutdown()
 }

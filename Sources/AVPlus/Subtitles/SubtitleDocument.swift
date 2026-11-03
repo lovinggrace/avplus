@@ -17,11 +17,40 @@ public struct SubtitleDocument: Sendable {
             default: return nil
             }
         }
+
+        /// Detects the format from the text itself: a `WEBVTT` header means WebVTT, otherwise
+        /// `-->` timing lines mean SubRip.
+        public init?(detectingIn contents: String) {
+            let text = contents.drop { $0 == "\u{FEFF}" || $0.isWhitespace }
+            if text.hasPrefix("WEBVTT") {
+                self = .webVTT
+            } else if text.contains("-->") {
+                self = .subRip
+            } else {
+                return nil
+            }
+        }
+
+        public var fileExtension: String {
+            switch self {
+            case .subRip: "srt"
+            case .webVTT: "vtt"
+            }
+        }
     }
 
-    public enum ParseError: Error, Sendable {
+    public enum ParseError: Error, Sendable, LocalizedError {
         case unsupportedFormat(String)
         case unreadableEncoding
+        case noCues
+
+        public var errorDescription: String? {
+            switch self {
+            case let .unsupportedFormat(hint): "Unsupported subtitle format (\(hint)). Use SubRip (.srt) or WebVTT (.vtt)."
+            case .unreadableEncoding: "The subtitle file is not valid text."
+            case .noCues: "The subtitles contain no cues."
+            }
+        }
     }
 
     /// Cues sorted by start time. `start` and `end` are always set.
@@ -55,12 +84,9 @@ public struct SubtitleDocument: Sendable {
             ?? String(data: data, encoding: .isoLatin1)
         else { throw ParseError.unreadableEncoding }
 
-        let format = Format(pathExtension: url.pathExtension)
-        if format == nil, !url.pathExtension.isEmpty, !contents.hasPrefix("WEBVTT") {
-            // Allow extension-less URLs but reject e.g. .ass files we would mangle.
-            if !["txt", "sub"].contains(url.pathExtension.lowercased()) {
-                throw ParseError.unsupportedFormat(url.pathExtension)
-            }
+        // Remote URLs often have no telling extension (`/subtitles?id=3`), so fall back to sniffing.
+        guard let format = Format(pathExtension: url.pathExtension) ?? Format(detectingIn: contents) else {
+            throw ParseError.unsupportedFormat(url.pathExtension.isEmpty ? url.lastPathComponent : url.pathExtension)
         }
         return SubtitleDocument(contents: contents, format: format)
     }

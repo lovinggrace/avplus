@@ -72,6 +72,25 @@ struct SubtitleParsingTests {
         #expect(styled.runs.contains { $0.foregroundColor != nil })
     }
 
+    @Test func detectsFormatFromContents() {
+        #expect(SubtitleDocument.Format(detectingIn: "\u{FEFF}WEBVTT\n\n00:01.000 --> 00:02.000\nHi") == .webVTT)
+        #expect(SubtitleDocument.Format(detectingIn: "1\n00:00:01,000 --> 00:00:02,000\nHi") == .subRip)
+        #expect(SubtitleDocument.Format(detectingIn: "[Script Info]\nTitle: ASS") == nil)
+    }
+
+    @Test func loadsFilesWithoutTellingExtension() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).txt")
+        try "WEBVTT\n\n00:00.500 --> 00:01.000\nSniffed".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let document = try await SubtitleDocument.load(from: file)
+        #expect(document.cues.map(\.text) == ["Sniffed"])
+
+        let ass = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).ass")
+        try "[Script Info]".write(to: ass, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: ass) }
+        await #expect(throws: SubtitleDocument.ParseError.self) { try await SubtitleDocument.load(from: ass) }
+    }
+
     @Test func parsesTimestamps() {
         #expect(SubtitleDocument.parseTimestamp("01:02:03,450") == 3723.45)
         #expect(SubtitleDocument.parseTimestamp("02:03.5") == 123.5)
