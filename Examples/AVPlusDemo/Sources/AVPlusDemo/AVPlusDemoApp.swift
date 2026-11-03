@@ -31,6 +31,8 @@ struct PlayerScreen: View {
     @State private var importing: ImportKind?
     @State private var scrubTime: Double?
     @State private var errorMessage: String?
+    @State private var generation: SubtitleGenerationTask?
+    @State private var transcriptionLanguage = "en-US"
 
     private enum ImportKind {
         case media
@@ -51,7 +53,10 @@ struct PlayerScreen: View {
             controls.padding(12)
         }
         .task {
-            if let initialURL { await player.load(initialURL) }
+            if let initialURL {
+                await player.load(initialURL)
+                player.restoreSubtitles()
+            }
         }
         .fileImporter(
             isPresented: Binding(get: { importing != nil }, set: { if !$0 { importing = nil } }),
@@ -60,7 +65,9 @@ struct PlayerScreen: View {
             guard case let .success(url) = result else { return }
             Task {
                 switch importing {
-                case .media: await player.load(url)
+                case .media:
+                    await player.load(url)
+                    player.restoreSubtitles()
                 case .subtitles: await addSubtitles(from: url)
                 case nil: break
                 }
@@ -120,10 +127,58 @@ struct PlayerScreen: View {
 
                 Spacer()
                 Text(statusText).foregroundStyle(.secondary)
+                generationControls
                 Button("Add Subtitles…") { importing = .subtitles }
                     .disabled(player.backend == nil)
                 Button("Open…") { importing = .media }
             }
+        }
+    }
+
+    /// On-device transcription of the open media, with progress, cancel and SRT export.
+    @ViewBuilder
+    private var generationControls: some View {
+        if let generation, generation.isRunning {
+            if generation.phase == .downloadingModel {
+                ProgressView(value: generation.modelDownloadProgress ?? 0) { Text("Downloading model") }
+                    .frame(width: 120)
+            } else {
+                ProgressView(value: generation.progress).frame(width: 120)
+            }
+            Button("Cancel", systemImage: "xmark.circle") { generation.cancel() }
+                .labelStyle(.iconOnly)
+        } else {
+            Picker("Language", selection: $transcriptionLanguage) {
+                Text("English").tag("en-US")
+                Text("Japanese").tag("ja-JP")
+            }
+            .labelsHidden()
+            .fixedSize()
+            Button("Generate Subtitles") {
+                // `.persistent` keeps transcripts across launches; restoreSubtitles() brings them back.
+                generation = player.generateSubtitles(
+                    locale: Locale(identifier: transcriptionLanguage),
+                    store: .persistent
+                )
+            }
+            .disabled(player.backend == nil)
+            if let track = player.selectedSubtitleTrack, let document = player.subtitleDocument(for: track) {
+                Button("Export SRT", systemImage: "square.and.arrow.down") { export(document) }
+                    .labelStyle(.iconOnly)
+                    .help("Save the selected subtitles as SubRip next to the media")
+            }
+        }
+        if case let .failed(message) = generation?.phase {
+            Text(message).foregroundStyle(.red).lineLimit(1)
+        }
+    }
+
+    private func export(_ document: SubtitleDocument) {
+        guard let url = player.url, url.isFileURL else { return }
+        do {
+            try document.write(to: url.deletingPathExtension().appendingPathExtension("srt"))
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 

@@ -70,12 +70,11 @@ public struct AVPlusPlayerView<SubtitleContent: View>: View {
 }
 
 extension AVPlusPlayerView where SubtitleContent == SubtitleOverlay {
-    /// Uses ``SubtitleOverlay`` when ``SubtitleRendering/client`` is configured, and draws
-    /// nothing when the backend renders subtitles itself.
+    /// Uses ``SubtitleOverlay`` whenever the backend does not draw the subtitles itself (see
+    /// ``AVPlusPlayer/requiresSubtitleOverlay``).
     public init(player: AVPlusPlayer, controls: Controls = .system) {
-        let showsCues = player.configuration.subtitleRendering == .client
         self.init(player: player, controls: controls) { cues in
-            SubtitleOverlay(cues: showsCues ? cues : [])
+            SubtitleOverlay(cues: player.requiresSubtitleOverlay ? cues : [])
         }
     }
 }

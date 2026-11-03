@@ -74,6 +74,8 @@ public struct MediaTrack: Identifiable, Sendable, Hashable {
     public var isHearingImpaired: Bool
     /// Audio description for blind and low-vision viewers.
     public var isAudioDescription: Bool
+    /// Subtitles transcribed on device by ``SubtitleGenerator``.
+    public var isGenerated: Bool
     /// `true` for subtitles added with ``AVPlusPlayer/addSubtitle(url:title:language:select:)``.
     public var isExternal: Bool
     public var codec: String?
@@ -87,6 +89,7 @@ public struct MediaTrack: Identifiable, Sendable, Hashable {
         isForced: Bool = false,
         isHearingImpaired: Bool = false,
         isAudioDescription: Bool = false,
+        isGenerated: Bool = false,
         isExternal: Bool = false,
         codec: String? = nil
     ) {
@@ -98,6 +101,7 @@ public struct MediaTrack: Identifiable, Sendable, Hashable {
         self.isForced = isForced
         self.isHearingImpaired = isHearingImpaired
         self.isAudioDescription = isAudioDescription
+        self.isGenerated = isGenerated
         self.isExternal = isExternal
         self.codec = codec
     }

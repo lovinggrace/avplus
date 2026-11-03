@@ -72,6 +72,12 @@ public final class AVPlusPlayer {
     }
 
     public var isPlaying: Bool { status == .playing }
+
+    /// Whether the app has to draw ``subtitleCues`` for subtitles to be visible: always with
+    /// ``SubtitleRendering/client``, and for document and generated tracks, which no backend draws.
+    public var requiresSubtitleOverlay: Bool {
+        configuration.subtitleRendering == .client || activeDocumentTrackID != nil
+    }
     public var selectedAudioTrack: MediaTrack? { audioTracks.first { $0.id == selectedAudioTrackID } }
     public var selectedSubtitleTrack: MediaTrack? { subtitleTracks.first { $0.id == selectedSubtitleTrackID } }
 
@@ -90,6 +96,21 @@ public final class AVPlusPlayer {
     @ObservationIgnored private var currentLoad: (url: URL, startTime: TimeInterval?, autoplay: Bool)?
     @ObservationIgnored private var externalSubtitles: [ExternalSubtitle] = []
     @ObservationIgnored private var isResolvingBackend = false
+
+    /// Subtitle tracks the player serves itself from a ``SubtitleDocument`` (documents added by
+    /// the app, generated transcripts), identically for every backend.
+    @ObservationIgnored private var documentTracks: [DocumentTrack] = []
+    @ObservationIgnored private var engineSubtitleTracks: [MediaTrack] = []
+    @ObservationIgnored private var nextDocumentTrackNumber = 0
+    private var activeDocumentTrackID: MediaTrack.ID?
+    @ObservationIgnored var subtitleGenerations: [SubtitleGenerationTask] = []
+
+    struct DocumentTrack {
+        var track: MediaTrack
+        var document: SubtitleDocument
+        /// The ``SubtitleStore`` variant this track was restored from or saved as.
+        var storeVariant: String?
+    }
 
     /// Sidecar subtitles of the current media, replayed when the player falls back to mpv.
     private struct ExternalSubtitle {
@@ -115,6 +136,7 @@ public final class AVPlusPlayer {
     public func load(_ url: URL, startTime: TimeInterval? = nil, autoplay: Bool = true) async {
         loadGeneration += 1
         let generation = loadGeneration
+        clearDocumentTracks()
         resetMediaState()
         self.url = url
         currentLoad = (url, startTime, autoplay)
@@ -141,6 +163,7 @@ public final class AVPlusPlayer {
         url = nil
         currentLoad = nil
         externalSubtitles = []
+        clearDocumentTracks()
         resetMediaState()
         status = .idle
     }
@@ -167,6 +190,7 @@ public final class AVPlusPlayer {
         var target = max(0, time)
         if let duration { target = min(target, duration) }
         currentTime = target
+        updateDocumentCues()
         return await engine.seek(to: target, precise: precise)
     }
 
@@ -185,6 +209,16 @@ public final class AVPlusPlayer {
 
     /// Selects a subtitle track, or turns subtitles off with `nil`.
     public func selectSubtitleTrack(_ track: MediaTrack?) {
+        if let track, documentTracks.contains(where: { $0.track.id == track.id }) {
+            // Set first: the engine reports its own (now empty) selection synchronously.
+            activeDocumentTrackID = track.id
+            selectedSubtitleTrackID = track.id
+            subtitleCues = []
+            engine?.selectSubtitleTrack(id: nil)
+            updateDocumentCues()
+            return
+        }
+        activeDocumentTrackID = nil
         selectedSubtitleTrackID = track?.id
         subtitleCues = []
         engine?.selectSubtitleTrack(id: track?.id)
@@ -239,6 +273,17 @@ public final class AVPlusPlayer {
     /// removed; deselect them with `selectSubtitleTrack(nil)` instead.
     public func removeSubtitle(_ track: MediaTrack) {
         guard track.isExternal else { return }
+        if documentTracks.contains(where: { $0.track.id == track.id }) {
+            subtitleGenerations.filter { $0.track?.id == track.id }.forEach { $0.cancel() }
+            documentTracks.removeAll { $0.track.id == track.id }
+            if activeDocumentTrackID == track.id {
+                activeDocumentTrackID = nil
+                selectedSubtitleTrackID = nil
+                subtitleCues = []
+            }
+            refreshSubtitleTracks()
+            return
+        }
         engine?.removeExternalSubtitle(id: track.id)
         externalSubtitles.removeAll { $0.trackID == track.id }
         subtitleTracks.removeAll { $0.id == track.id }
@@ -278,6 +323,119 @@ public final class AVPlusPlayer {
             isExternal: true,
             codec: source.codec
         )
+    }
+
+    /// Adds subtitles you already have as a ``SubtitleDocument`` (parsed, generated or built in
+    /// code) as a track of the current media. The player serves its cues itself, so the track
+    /// behaves the same with both backends and appears immediately.
+    @discardableResult
+    public func addSubtitle(
+        document: SubtitleDocument,
+        title: String? = nil,
+        language: String? = nil,
+        isGenerated: Bool = false,
+        select: Bool = true
+    ) throws -> MediaTrack {
+        guard currentLoad != nil else { throw PlaybackError("Load media before adding subtitles") }
+        nextDocumentTrackNumber += 1
+        let track = MediaTrack(
+            id: "document-\(nextDocumentTrackNumber)",
+            kind: .subtitle,
+            title: title ?? (isGenerated ? "Auto-generated" : "Subtitles"),
+            language: language,
+            isGenerated: isGenerated,
+            isExternal: true,
+            codec: isGenerated ? "generated" : nil
+        )
+        documentTracks.append(DocumentTrack(track: track, document: document))
+        refreshSubtitleTracks()
+        if select { selectSubtitleTrack(track) }
+        return track
+    }
+
+    /// The cues of a track added with ``addSubtitle(document:title:language:isGenerated:select:)``
+    /// or generated with `generateSubtitles`, e.g. to export them with
+    /// ``SubtitleDocument/export(as:)``.
+    public func subtitleDocument(for track: MediaTrack) -> SubtitleDocument? {
+        documentTracks.first { $0.track.id == track.id }?.document
+    }
+
+    /// Saves a document or generated track for the current media, so ``restoreSubtitles(from:select:)``
+    /// can bring it back in a later session.
+    public func saveSubtitles(_ track: MediaTrack, to store: SubtitleStore = .persistent) throws {
+        guard let url, let index = documentTracks.firstIndex(where: { $0.track.id == track.id }) else {
+            throw PlaybackError("Only document and generated subtitle tracks of the current media can be saved")
+        }
+        let entry = documentTracks[index]
+        let variant = entry.storeVariant ?? "saved-\(UUID().uuidString)"
+        documentTracks[index].storeVariant = variant
+        try store.save(SubtitleStore.Entry(
+            variant: variant,
+            title: entry.track.title,
+            language: entry.track.language,
+            isGenerated: entry.track.isGenerated,
+            document: entry.document
+        ), for: url)
+    }
+
+    /// Adds every track stored for the current media in `store`, skipping ones already present.
+    /// - Parameter select: Selects the most recently stored track.
+    @discardableResult
+    public func restoreSubtitles(from store: SubtitleStore = .persistent, select: Bool = false) -> [MediaTrack] {
+        guard let url, currentLoad != nil else { return [] }
+        let present = Set(documentTracks.compactMap(\.storeVariant))
+        var restored: [MediaTrack] = []
+        for entry in store.entries(for: url) where !present.contains(entry.variant) {
+            guard let track = try? addSubtitle(
+                document: entry.document,
+                title: entry.title,
+                language: entry.language,
+                isGenerated: entry.isGenerated,
+                select: false
+            ) else { continue }
+            setStoreVariant(entry.variant, for: track.id)
+            restored.append(track)
+        }
+        if select, let last = restored.last { selectSubtitleTrack(last) }
+        return restored
+    }
+
+    // MARK: - Document tracks
+
+    func documentTrack(withVariant variant: String) -> DocumentTrack? {
+        documentTracks.first { $0.storeVariant == variant }
+    }
+
+    func setStoreVariant(_ variant: String, for trackID: MediaTrack.ID) {
+        guard let index = documentTracks.firstIndex(where: { $0.track.id == trackID }) else { return }
+        documentTracks[index].storeVariant = variant
+    }
+
+    /// Replaces a document track's cues, e.g. as a transcription progresses.
+    func updateDocument(_ document: SubtitleDocument, for trackID: MediaTrack.ID) {
+        guard let index = documentTracks.firstIndex(where: { $0.track.id == trackID }) else { return }
+        documentTracks[index].document = document
+        if activeDocumentTrackID == trackID { updateDocumentCues() }
+    }
+
+    private func updateDocumentCues() {
+        guard let activeDocumentTrackID,
+              let document = documentTracks.first(where: { $0.track.id == activeDocumentTrackID })?.document
+        else { return }
+        let cues = document.cues(at: currentTime)
+        if subtitleCues.map(\.id) != cues.map(\.id) { subtitleCues = cues }
+    }
+
+    private func refreshSubtitleTracks() {
+        let tracks = engineSubtitleTracks + documentTracks.map(\.track)
+        if subtitleTracks != tracks { subtitleTracks = tracks }
+    }
+
+    private func clearDocumentTracks() {
+        subtitleGenerations.forEach { $0.cancel() }
+        subtitleGenerations = []
+        documentTracks = []
+        activeDocumentTrackID = nil
     }
 
     // MARK: - mpv passthrough
@@ -362,6 +520,7 @@ public final class AVPlusPlayer {
             if isBuffering != buffering { isBuffering = buffering }
         case let .currentTime(time):
             currentTime = time
+            updateDocumentCues()
         case let .duration(newDuration):
             if duration != newDuration { duration = newDuration }
         case let .bufferedTime(time):
@@ -376,12 +535,16 @@ public final class AVPlusPlayer {
             if videoSize != size { videoSize = size }
         case let .tracks(audio, subtitles):
             if audioTracks != audio { audioTracks = audio }
-            if subtitleTracks != subtitles { subtitleTracks = subtitles }
+            engineSubtitleTracks = subtitles
+            refreshSubtitleTracks()
         case let .selectedAudioTrack(id):
             if selectedAudioTrackID != id { selectedAudioTrackID = id }
         case let .selectedSubtitleTrack(id):
+            // While a document track is shown, the engine's own subtitles stay off.
+            guard activeDocumentTrackID == nil else { return }
             if selectedSubtitleTrackID != id { selectedSubtitleTrackID = id }
         case let .subtitleCues(cues):
+            guard activeDocumentTrackID == nil else { return }
             // AVFoundation re-delivers identical cues; avoid needless view updates.
             if subtitleCues.map(\.text) != cues.map(\.text) {
                 subtitleCues = cues
@@ -408,9 +571,11 @@ public final class AVPlusPlayer {
         bufferedTime = nil
         videoSize = nil
         audioTracks = []
-        subtitleTracks = []
+        // Document tracks belong to the media, not the backend, so they survive a fallback.
+        engineSubtitleTracks = []
+        subtitleTracks = documentTracks.map(\.track)
         selectedAudioTrackID = nil
-        selectedSubtitleTrackID = nil
+        selectedSubtitleTrackID = activeDocumentTrackID
         subtitleCues = []
     }
 }

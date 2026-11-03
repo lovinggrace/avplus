@@ -1,10 +1,11 @@
-// swift-tools-version:6.0
+// swift-tools-version:6.2
 
 import PackageDescription
 
 let package = Package(
     name: "AVPlus",
-    platforms: [.iOS(.v17), .macOS(.v14), .tvOS(.v17), .visionOS(.v1)],
+    // iOS 26 is required for on-device subtitle generation (SpeechAnalyzer / SpeechTranscriber).
+    platforms: [.iOS(.v26), .macOS(.v26), .tvOS(.v26), .visionOS(.v26)],
     products: [
         .library(name: "AVPlus", targets: ["AVPlus"]),
     ],

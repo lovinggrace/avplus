@@ -7,7 +7,7 @@ A SwiftUI façade over two playback engines:
 
 Apps get one observable player, one view and one subtitle model, whichever engine runs.
 
-Platforms: iOS 17, macOS 14, tvOS 17 and visionOS 1.
+Platforms: iOS 26, macOS 26, tvOS 26 and visionOS 26. On-device subtitle generation needs SpeechAnalyzer, which these releases introduced.
 
 ## Installation
 
@@ -116,6 +116,52 @@ player.removeSubtitle(english!)      // remove an added track
 - In a sandboxed app, read files the user picked while you hold security-scoped access, then pass the text with `addSubtitle(text:)`. mpv opens files lazily, after that access may have ended. The demo app shows this.
 - mpv's automatic loading of `movie.srt` next to `movie.mkv` is off (`sub-auto=no`), matching AVFoundation. To turn it back on, pass `mpvOptions: ["sub-auto": "exact"]`.
 
+### Generating subtitles on device
+
+AVPlus can transcribe a video's audio on device and turn the transcript into subtitles. The generated track works with both backends:
+
+```swift
+let generation = player.generateSubtitles(locale: Locale(identifier: "ja-JP"))
+
+ProgressView(value: generation.progress)          // observable: phase, progress, cues, document
+Button("Cancel") { generation.cancel() }
+
+let document = try await generation.value()      // the finished SubtitleDocument
+try document.write(to: movieURL.deletingPathExtension().appendingPathExtension("srt"))
+```
+
+- **The track shows up right away** (`isGenerated == true`) and fills in as sentences are recognized, so you can turn it on while transcription is still running.
+- **Audio track:** the currently selected audio track is transcribed by default. Pass `audioTrack:` to pick another.
+- **Caching:** finished transcripts go into `SubtitleStore.cache`, keyed by the file's path, size and modification date plus the language and audio track. Pass `store: .persistent` to keep them beyond cache purges, or `nil` to always transcribe.
+- **Persistence:** `saveSubtitles(_:to:)` saves any generated or document track. On a later launch, `restoreSubtitles(from:)` adds the saved tracks back for that media, and `generateSubtitles` reuses a restored transcript instead of transcribing again.
+- **Bring your own subtitles:** `addSubtitle(document:)` attaches any `SubtitleDocument` (parsed, generated or built in code) as a track. `subtitleDocument(for:)` gives the cues back, and `SubtitleDocument.export(as:)` / `write(to:)` produce SRT or WebVTT.
+
+`SubtitleGenerator` is the same pipeline without a player, for batch jobs or exporting:
+
+```swift
+for try await event in SubtitleGenerator().events(for: url, options: .init(locale: Locale(identifier: "en-US"))) {
+    switch event {
+    case let .downloadingModel(progress): print("model", progress)
+    case let .transcribing(progress): print("transcribing", progress)
+    case let .cues(cues): print(cues.map(\.text))          // final cues, in order
+    case let .finished(document, fromCache): print(document.export(as: .webVTT), fromCache)
+    }
+}
+```
+
+How it works:
+
+1. **Decoding.** The selected audio track is decoded into timestamped PCM with `AVAssetReader`. Formats AVFoundation can't read, such as Matroska, WebM, Opus or Vorbis, fall back to the FFmpeg that ships with MPVKit. The decoder runs only as fast as the transcriber consumes audio, so a long movie is never held decoded in memory.
+2. **Transcription.** `SpeechAnalyzer` with `SpeechTranscriber` (`attributeOptions: [.audioTimeRange]`) receives every buffer with its media-relative start time. Word timings are therefore on the same clock as `currentTime`, for both backends. The speech model is downloaded through `AssetInventory` when needed, with progress reported.
+3. **Alignment.** The transcriber stretches the first word of each result back over the silence before it. A 10 ms loudness envelope of the decoded audio moves those starts forward to where speech actually begins, typically within 0.1 s of the audio.
+4. **Sentences.** Words build up across recognition results, and `NLTokenizer(unit: .sentence)`, configured for English or Japanese, splits them into sentences. That covers sentences that span results and results that hold several sentences. When punctuation is missing:
+   - a pause of 1.2 s or more ends a sentence;
+   - text that grows past twice the cue limits is cut at the best boundary, weighing pauses, commas/読点 and balance;
+   - long runs without spaces are split into words with interpolated times.
+5. **Cue limits.** `SubtitleSegmentation` controls the size of each cue. The `.english` preset allows 84 characters, `.japanese` 32 characters, and both 7 seconds and at least 1 second per cue. You can pass your own.
+
+Generation runs entirely on device. `SubtitleGenerator.supports(_:)` tells you whether a locale is available. Cancel by calling `cancel()`, or by cancelling the task that consumes `events`, which stops decoding and transcription.
+
 ### Rendering subtitles yourself
 
 With the default `SubtitleRendering.client`, both engines stop drawing subtitles and publish them as `SubtitleCue` values instead:
@@ -177,4 +223,4 @@ cd Examples/AVPlusDemo && swift run AVPlusDemo /path/to/video.mkv
 swift test
 ```
 
-The tests cover subtitle parsing, mpv track-list decoding, backend routing, and real playback through both engines using the fixtures in `Tests/AVPlusTests/Fixtures`: an H.264/AAC MP4, a VP9/Opus/SRT MKV, an SRT file, and an MP4 with English and German audio and subtitle tracks. The track selection test plays the same multi-track file through both backends and expects the same results.
+The tests cover subtitle parsing, mpv track-list decoding, backend routing, and real playback through both engines using the fixtures in `Tests/AVPlusTests/Fixtures`: an H.264/AAC MP4, a VP9/Opus/SRT MKV, an SRT file, an MP4 with English and German audio and subtitle tracks, and spoken English (MP4/AAC) and Japanese (MKV/Opus) clips that run the transcription pipeline through AVAssetReader and FFmpeg. The transcription tests need the en-US and ja-JP speech models installed. The track selection test plays the same multi-track file through both backends and expects the same results.

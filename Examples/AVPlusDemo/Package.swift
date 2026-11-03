@@ -1,4 +1,4 @@
-// swift-tools-version:6.0
+// swift-tools-version:6.2
 
 import PackageDescription
 
@@ -6,7 +6,7 @@ import PackageDescription
 // For iOS/tvOS, add AVPlus to an app target and reuse `PlayerScreen`.
 let package = Package(
     name: "AVPlusDemo",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     dependencies: [
         .package(path: "../.."),
     ],

@@ -5,7 +5,7 @@ import Foundation
 /// AVFoundation cannot load sidecar text subtitles, so the AVFoundation backend uses this to
 /// serve cues for ``AVPlusPlayer/addSubtitle(url:title:language:select:)``. It is public so apps
 /// can parse subtitle files themselves too.
-public struct SubtitleDocument: Sendable {
+public struct SubtitleDocument: Sendable, Hashable {
     public enum Format: Sendable {
         case subRip
         case webVTT
