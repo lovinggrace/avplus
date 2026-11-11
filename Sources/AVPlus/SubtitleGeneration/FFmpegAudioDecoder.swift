@@ -8,6 +8,8 @@ import Libswresample
 /// e.g. Opus or Vorbis in Matroska/WebM, AC-3 in AVI, FLAC in Ogg.
 final class FFmpegAudioDecoder: AudioChunkDecoder, @unchecked Sendable {
     private(set) var duration: TimeInterval?
+    /// Whether only the front centre channel of a surround track is decoded.
+    private(set) var usesCenterChannel = false
 
     // Defaults let `init` release partially opened FFmpeg state when it throws.
     private var formatContext: UnsafeMutablePointer<AVFormatContext>?
@@ -33,7 +35,9 @@ final class FFmpegAudioDecoder: AudioChunkDecoder, @unchecked Sendable {
     /// Timestamps this close to the end of the previous frame count as continuous audio.
     private static let timestampTolerance: TimeInterval = 0.01
 
-    init(url: URL, trackIndex: Int?, sampleRate: Double) throws {
+    /// - Parameter prefersCenterChannel: Take only the front centre channel of surround audio,
+    ///   where film and TV mixes put the dialogue, instead of a downmix that includes music.
+    init(url: URL, trackIndex: Int?, sampleRate: Double, prefersCenterChannel: Bool = false) throws {
         self.sampleRate = sampleRate
         let path = url.isFileURL ? url.path : url.absoluteString
         if !url.isFileURL { avformat_network_init() }
@@ -73,6 +77,14 @@ final class FFmpegAudioDecoder: AudioChunkDecoder, @unchecked Sendable {
                 &codecContext.pointee.ch_layout, codecContext.pointee.sample_fmt, codecContext.pointee.sample_rate,
                 0, nil
             ), "configure the resampler")
+            let inputChannels = codecContext.pointee.ch_layout.nb_channels
+            let center = av_channel_layout_index_from_channel(&codecContext.pointee.ch_layout, AV_CHAN_FRONT_CENTER)
+            if prefersCenterChannel, inputChannels > 2, center >= 0 {
+                var matrix = [Double](repeating: 0, count: Int(inputChannels))
+                matrix[Int(center)] = 1
+                try Self.check(swr_set_matrix(resampler, matrix, inputChannels), "select the centre channel")
+                usesCenterChannel = true
+            }
             try Self.check(swr_init(resampler), "start the resampler")
 
             packet = av_packet_alloc()

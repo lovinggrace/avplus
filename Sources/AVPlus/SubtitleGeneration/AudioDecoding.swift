@@ -46,17 +46,29 @@ public enum SubtitleGenerationError: Error, Sendable, LocalizedError, Equatable 
 enum AudioDecoding {
     /// Opens the `trackIndex`-th audio track (in file order) with AVAssetReader, falling back to
     /// FFmpeg for containers and codecs AVFoundation cannot read.
-    static func makeDecoder(url: URL, trackIndex: Int?, sampleRate: Double) async throws -> any AudioChunkDecoder {
+    /// - Parameter prefersCenterChannel: For surround tracks, decode only the front centre channel.
+    ///   Those tracks always go through FFmpeg, which can pick a channel.
+    static func makeDecoder(
+        url: URL,
+        trackIndex: Int?,
+        sampleRate: Double,
+        prefersCenterChannel: Bool = false
+    ) async throws -> any AudioChunkDecoder {
         var assetReaderError: (any Error)?
         if BackendResolver.quickDecision(for: url) != .mpv {
             do {
-                return try await AssetReaderAudioDecoder.make(url: url, trackIndex: trackIndex, sampleRate: sampleRate)
+                return try await AssetReaderAudioDecoder.make(
+                    url: url, trackIndex: trackIndex, sampleRate: sampleRate, rejectsSurround: prefersCenterChannel
+                )
             } catch {
-                assetReaderError = error
+                // Not a failure to report if FFmpeg then succeeds or fails for its own reason.
+                if !(error is AssetReaderAudioDecoder.SurroundTrack) { assetReaderError = error }
             }
         }
         do {
-            return try FFmpegAudioDecoder(url: url, trackIndex: trackIndex, sampleRate: sampleRate)
+            return try FFmpegAudioDecoder(
+                url: url, trackIndex: trackIndex, sampleRate: sampleRate, prefersCenterChannel: prefersCenterChannel
+            )
         } catch {
             // Prefer AVFoundation's explanation when both failed, e.g. "no audio track".
             throw assetReaderError ?? error
@@ -81,11 +93,24 @@ final class AssetReaderAudioDecoder: AudioChunkDecoder, @unchecked Sendable {
         self.sampleRate = sampleRate
     }
 
-    static func make(url: URL, trackIndex: Int?, sampleRate: Double) async throws -> AssetReaderAudioDecoder {
+    /// Thrown by `make` for a track with more than two channels when the caller wants to pick one.
+    struct SurroundTrack: Error {}
+
+    static func make(
+        url: URL,
+        trackIndex: Int?,
+        sampleRate: Double,
+        rejectsSurround: Bool = false
+    ) async throws -> AssetReaderAudioDecoder {
         let asset = AVURLAsset(url: url)
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         let index = trackIndex ?? 0
         guard tracks.indices.contains(index) else { throw SubtitleGenerationError.noAudioTrack }
+        if rejectsSurround {
+            let channels = try await tracks[index].load(.formatDescriptions)
+                .compactMap { $0.audioStreamBasicDescription?.mChannelsPerFrame }.max() ?? 0
+            if channels > 2 { throw SurroundTrack() }
+        }
         let duration = try await asset.load(.duration)
 
         let reader = try AVAssetReader(asset: asset)

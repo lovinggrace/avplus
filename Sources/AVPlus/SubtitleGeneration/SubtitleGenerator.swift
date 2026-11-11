@@ -23,6 +23,15 @@ import Speech
 /// }
 /// ```
 public struct SubtitleGenerator: Sendable {
+    /// Ways to give the recognizer the dialogue without the music and effects around it.
+    public struct DialogueFocus: OptionSet, Sendable, Hashable {
+        public let rawValue: Int
+        public init(rawValue: Int) { self.rawValue = rawValue }
+
+        /// For surround tracks, use only the front centre channel, where the dialogue is mixed.
+        public static let centerChannel = DialogueFocus(rawValue: 1 << 0)
+    }
+
     public struct Options: Sendable {
         /// The spoken language. Matched to the closest locale the transcriber supports.
         public var locale: Locale
@@ -31,6 +40,8 @@ public struct SubtitleGenerator: Sendable {
         public var audioTrackIndex: Int?
         /// How the transcript is cut into cues. `nil` uses ``SubtitleSegmentation/defaults(for:)``.
         public var segmentation: SubtitleSegmentation?
+        /// Audio clean-up before recognition. Cached transcripts don't record it.
+        public var dialogueFocus: DialogueFocus
         /// Download the speech model if it is not installed yet.
         public var allowsModelDownload: Bool
         /// Where results are looked up and saved. `nil` disables caching.
@@ -40,12 +51,14 @@ public struct SubtitleGenerator: Sendable {
             locale: Locale = .current,
             audioTrackIndex: Int? = nil,
             segmentation: SubtitleSegmentation? = nil,
+            dialogueFocus: DialogueFocus = [],
             allowsModelDownload: Bool = true,
             store: SubtitleStore? = .cache
         ) {
             self.locale = locale
             self.audioTrackIndex = audioTrackIndex
             self.segmentation = segmentation
+            self.dialogueFocus = dialogueFocus
             self.allowsModelDownload = allowsModelDownload
             self.store = store
         }
@@ -127,11 +140,7 @@ public struct SubtitleGenerator: Sendable {
 
         let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
             ?? AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
-        let decoder = try await AudioDecoding.makeDecoder(
-            url: url,
-            trackIndex: options.audioTrackIndex,
-            sampleRate: analyzerFormat.sampleRate
-        )
+        let decoder = try await makeDecoder(url: url, options: options, sampleRate: analyzerFormat.sampleRate)
         let duration = decoder.duration
         let activity = SpeechActivityMap(sampleRate: analyzerFormat.sampleRate)
         let source = AnalyzerInputSource(decoder: decoder, format: analyzerFormat, activity: activity) { time in
@@ -187,6 +196,16 @@ public struct SubtitleGenerator: Sendable {
         )
         emit(.transcribing(progress: 1))
         emit(.finished(document, fromCache: false))
+    }
+
+    /// Opens the track with the audio clean-up `options` ask for.
+    static func makeDecoder(url: URL, options: Options, sampleRate: Double) async throws -> any AudioChunkDecoder {
+        try await AudioDecoding.makeDecoder(
+            url: url,
+            trackIndex: options.audioTrackIndex,
+            sampleRate: sampleRate,
+            prefersCenterChannel: options.dialogueFocus.contains(.centerChannel)
+        )
     }
 
     private static func installModelIfNeeded(
