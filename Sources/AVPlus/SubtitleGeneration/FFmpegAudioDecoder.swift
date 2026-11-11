@@ -30,6 +30,8 @@ final class FFmpegAudioDecoder: AudioChunkDecoder, @unchecked Sendable {
     private static let errorEOF: Int32 = -541_478_725 // AVERROR_EOF, FFERRTAG('E','O','F',' ')
     private static let errorAgain: Int32 = -EAGAIN // AVERROR(EAGAIN)
     private static let noTimestamp = Int64.min // AV_NOPTS_VALUE
+    /// Timestamps this close to the end of the previous frame count as continuous audio.
+    private static let timestampTolerance: TimeInterval = 0.01
 
     init(url: URL, trackIndex: Int?, sampleRate: Double) throws {
         self.sampleRate = sampleRate
@@ -122,9 +124,13 @@ final class FFmpegAudioDecoder: AudioChunkDecoder, @unchecked Sendable {
         guard inputCount > 0, let resampler else { return nil }
 
         let timestamp = frame.pointee.best_effort_timestamp
-        let frameTime = timestamp == Self.noTimestamp
+        var frameTime = timestamp == Self.noTimestamp
             ? (nextFrameTime ?? 0)
             : Double(timestamp) * av_q2d(timeBase) - startTime
+        // Containers with coarse timestamps (Matroska counts milliseconds) round each frame's start,
+        // so a 21.33 ms AAC frame appears to start up to a millisecond early or late. Taken
+        // literally that drops or shifts samples at every frame; continuous audio follows on exactly.
+        if let nextFrameTime, abs(frameTime - nextFrameTime) < Self.timestampTolerance { frameTime = nextFrameTime }
         nextFrameTime = frameTime + Double(inputCount) / Double(inputSampleRate)
         // Samples still buffered in the resampler come out first, so the output starts earlier.
         let delay = Double(swr_get_delay(resampler, Int64(inputSampleRate))) / Double(inputSampleRate)
