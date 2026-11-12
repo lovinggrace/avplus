@@ -21,7 +21,9 @@ struct TranscriptAccuracyTests {
         for (name, focus) in variants where wanted?.contains(name) ?? true {
             let options = SubtitleGenerator.Options(locale: locale, dialogueFocus: focus, store: nil)
             let started = Date()
-            let document = try await SubtitleGenerator().generate(for: URL(fileURLWithPath: media), options: options)
+            // A web address (for example an HLS playlist) is used as it is.
+            let source = media.contains("://") ? URL(string: media)! : URL(fileURLWithPath: media)
+            let document = try await SubtitleGenerator().generate(for: source, options: options)
             let seconds = Date().timeIntervalSince(started)
             let text = Self.comparable(document.cues.map(\.text).joined())
             let errors = Self.editDistance(expected, text)
