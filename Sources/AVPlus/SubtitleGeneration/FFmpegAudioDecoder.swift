@@ -45,6 +45,11 @@ final class FFmpegAudioDecoder: AudioChunkDecoder, @unchecked Sendable {
         if !url.isFileURL { avformat_network_init() }
 
         var options: OpaquePointer?
+        // Match mpv's HLS demuxer: CDNs may serve MPEG-TS under names such as
+        // .ts.jpg. Probe the content instead of requiring its extension to
+        // match the detected format. Keep FFmpeg's protocol and local-file
+        // extension allowlists intact.
+        av_dict_set(&options, "extension_picky", "0", 0)
         if let userAgent = headers.userAgent { av_dict_set(&options, "user_agent", userAgent, 0) }
         if let referer = headers.referer { av_dict_set(&options, "referer", referer, 0) }
         let fields = headers.others.map { "\($0.name): \($0.value)\r\n" }.joined()

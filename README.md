@@ -224,3 +224,25 @@ swift test
 ```
 
 The tests cover subtitle parsing, mpv track-list decoding, backend routing, and real playback through both engines using the fixtures in `Tests/AVPlusTests/Fixtures`: an H.264/AAC MP4, a VP9/Opus/SRT MKV, an SRT file, an MP4 with English and German audio and subtitle tracks, and spoken English (MP4/AAC) and Japanese (MKV/Opus) clips that run the transcription pipeline through AVAssetReader and FFmpeg. The transcription tests need the en-US and ja-JP speech models installed. The track selection test plays the same multi-track file through both backends and expects the same results.
+
+### HLS audio regression checks
+
+`HLSPlaybackTests` includes a local master/variant playlist with muxed H.264/AAC
+MPEG-TS content intentionally named `segment.mp4`. The fixture was remuxed from
+`sample.mp4` (first second, stream copy). This checks audio extraction when a
+segment filename differs from its actual format, as with CDN `.ts.jpg` URLs.
+The FFmpeg audio decoder disables HLS `extension_picky`, matching mpv's existing
+behavior; protocol and local-file extension allowlists are unchanged.
+
+Optional live checks exercise mpv playback, direct FFmpeg decoding, and the
+AVAssetReader-to-FFmpeg fallback without requiring speech models:
+
+```sh
+AVPLUS_LIVE_HLS_URL='https://cdn.example/master.m3u8' \
+AVPLUS_LIVE_HLS_REFERER='https://embed.example/' \
+AVPLUS_LIVE_HLS_USER_AGENT='Mozilla/5.0' \
+swift test --filter HLSPlaybackTests
+```
+
+Without `AVPLUS_LIVE_HLS_URL`, only the offline test runs. Headless playback
+checks audio-track discovery and advancing time, not audible sound or rendering.
