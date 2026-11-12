@@ -19,7 +19,13 @@ struct TranscriptAccuracyTests {
         ]
         let wanted = environment["ACCURACY_VARIANTS"]?.split(separator: ",").map(String.init)
         for (name, focus) in variants where wanted?.contains(name) ?? true {
-            let options = SubtitleGenerator.Options(locale: locale, dialogueFocus: focus, store: nil)
+            // ACCURACY_HEADERS="Name: value|Other: value" sends request headers with a web address.
+            var headers: [String: String] = [:]
+            for field in (environment["ACCURACY_HEADERS"] ?? "").split(separator: "|") {
+                let parts = field.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                if parts.count == 2 { headers[parts[0]] = parts[1] }
+            }
+            let options = SubtitleGenerator.Options(locale: locale, dialogueFocus: focus, httpHeaders: headers, store: nil)
             let started = Date()
             // A web address (for example an HLS playlist) is used as it is.
             let source = media.contains("://") ? URL(string: media)! : URL(fileURLWithPath: media)

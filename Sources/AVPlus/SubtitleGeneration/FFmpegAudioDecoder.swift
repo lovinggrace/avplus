@@ -37,12 +37,20 @@ final class FFmpegAudioDecoder: AudioChunkDecoder, @unchecked Sendable {
 
     /// - Parameter prefersCenterChannel: Take only the front centre channel of surround audio,
     ///   where film and TV mixes put the dialogue, instead of a downmix that includes music.
-    init(url: URL, trackIndex: Int?, sampleRate: Double, prefersCenterChannel: Bool = false) throws {
+    /// - Parameter headers: Request headers for media read over HTTP. FFmpeg passes them on to the
+    ///   segment and key requests of an HLS stream.
+    init(url: URL, headers: HTTPHeaders = HTTPHeaders([:]), trackIndex: Int?, sampleRate: Double, prefersCenterChannel: Bool = false) throws {
         self.sampleRate = sampleRate
         let path = url.isFileURL ? url.path : url.absoluteString
         if !url.isFileURL { avformat_network_init() }
 
-        try Self.check(avformat_open_input(&formatContext, path, nil, nil), "open the media")
+        var options: OpaquePointer?
+        if let userAgent = headers.userAgent { av_dict_set(&options, "user_agent", userAgent, 0) }
+        if let referer = headers.referer { av_dict_set(&options, "referer", referer, 0) }
+        let fields = headers.others.map { "\($0.name): \($0.value)\r\n" }.joined()
+        if !fields.isEmpty { av_dict_set(&options, "headers", fields, 0) }
+        defer { av_dict_free(&options) }
+        try Self.check(avformat_open_input(&formatContext, path, nil, &options), "open the media")
         guard let formatContext else { throw SubtitleGenerationError.decodingFailed("FFmpeg could not open the media") }
         do {
             try Self.check(avformat_find_stream_info(formatContext, nil), "read stream info")

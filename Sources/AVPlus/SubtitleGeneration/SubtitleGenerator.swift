@@ -42,6 +42,8 @@ public struct SubtitleGenerator: Sendable {
         public var segmentation: SubtitleSegmentation?
         /// Audio clean-up before recognition. Cached transcripts don't record it.
         public var dialogueFocus: DialogueFocus
+        /// Request headers for media read over HTTP, as given to ``AVPlusPlayer/load(_:headers:startTime:autoplay:)``.
+        public var httpHeaders: [String: String]
         /// Download the speech model if it is not installed yet.
         public var allowsModelDownload: Bool
         /// Where results are looked up and saved. `nil` disables caching.
@@ -52,6 +54,7 @@ public struct SubtitleGenerator: Sendable {
             audioTrackIndex: Int? = nil,
             segmentation: SubtitleSegmentation? = nil,
             dialogueFocus: DialogueFocus = [],
+            httpHeaders: [String: String] = [:],
             allowsModelDownload: Bool = true,
             store: SubtitleStore? = .cache
         ) {
@@ -59,6 +62,7 @@ public struct SubtitleGenerator: Sendable {
             self.audioTrackIndex = audioTrackIndex
             self.segmentation = segmentation
             self.dialogueFocus = dialogueFocus
+            self.httpHeaders = httpHeaders
             self.allowsModelDownload = allowsModelDownload
             self.store = store
         }
@@ -202,6 +206,7 @@ public struct SubtitleGenerator: Sendable {
     static func makeDecoder(url: URL, options: Options, sampleRate: Double) async throws -> any AudioChunkDecoder {
         try await AudioDecoding.makeDecoder(
             url: url,
+            headers: HTTPHeaders(options.httpHeaders),
             trackIndex: options.audioTrackIndex,
             sampleRate: sampleRate,
             prefersCenterChannel: options.dialogueFocus.contains(.centerChannel)

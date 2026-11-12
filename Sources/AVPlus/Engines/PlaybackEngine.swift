@@ -40,7 +40,9 @@ protocol PlaybackEngine: AnyObject {
     var backend: PlaybackBackend { get }
     var eventHandler: ((EngineEvent) -> Void)? { get set }
 
-    func load(url: URL, startTime: TimeInterval?, autoplay: Bool)
+    /// - Parameter headers: Request headers for media loaded over HTTP, including every request a
+    ///   stream makes (playlists, segments, keys).
+    func load(url: URL, headers: HTTPHeaders, startTime: TimeInterval?, autoplay: Bool)
     func play()
     func pause()
     func seek(to time: TimeInterval, precise: Bool) async -> Bool

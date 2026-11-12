@@ -26,7 +26,7 @@ enum BackendResolver {
         return nil
     }
 
-    static func resolve(_ url: URL, selection: BackendSelection, probeTimeout: Duration) async -> PlaybackBackend {
+    static func resolve(_ url: URL, headers: HTTPHeaders = HTTPHeaders([:]), selection: BackendSelection, probeTimeout: Duration) async -> PlaybackBackend {
         switch selection {
         case .avFoundation: return .avFoundation
         case .mpv: return .mpv
@@ -35,7 +35,7 @@ enum BackendResolver {
         if let decision = quickDecision(for: url) { return decision }
 
         return await withTaskGroup(of: PlaybackBackend?.self) { group in
-            group.addTask { await isPlayableByAVFoundation(url) ? .avFoundation : .mpv }
+            group.addTask { await isPlayableByAVFoundation(url, headers: headers) ? .avFoundation : .mpv }
             group.addTask {
                 try? await Task.sleep(for: probeTimeout)
                 return nil
@@ -48,8 +48,8 @@ enum BackendResolver {
 
     /// `AVAsset.isPlayable` is `true` as soon as *any* track can be played, so a file with an
     /// AAC track and a VP9 video track would pass. Every video track has to be playable too.
-    static func isPlayableByAVFoundation(_ url: URL) async -> Bool {
-        let asset = AVURLAsset(url: url)
+    static func isPlayableByAVFoundation(_ url: URL, headers: HTTPHeaders = HTTPHeaders([:])) async -> Bool {
+        let asset = AVURLAsset(url: url, options: headers.assetOptions)
         do {
             let (isPlayable, hasProtectedContent, tracks) = try await asset.load(.isPlayable, .hasProtectedContent, .tracks)
             guard isPlayable else { return false }

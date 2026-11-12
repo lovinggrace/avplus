@@ -52,12 +52,12 @@ final class AVFoundationEngine: PlaybackEngine {
 
     // MARK: - PlaybackEngine
 
-    func load(url: URL, startTime: TimeInterval?, autoplay: Bool) {
+    func load(url: URL, headers: HTTPHeaders, startTime: TimeInterval?, autoplay: Bool) {
         resetItemState()
         self.autoplay = autoplay
         pendingStartTime = startTime
 
-        let item = AVPlayerItem(asset: AVURLAsset(url: url))
+        let item = AVPlayerItem(asset: AVURLAsset(url: url, options: headers.assetOptions))
         let output = AVPlayerItemLegibleOutput(mediaSubtypesForNativeRepresentation: [])
         output.suppressesPlayerRendering = configuration.subtitleRendering == .client
         output.setDelegate(legibleReceiver, queue: .main)

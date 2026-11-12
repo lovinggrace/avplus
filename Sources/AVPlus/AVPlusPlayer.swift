@@ -93,7 +93,7 @@ public final class AVPlusPlayer {
     private var storedMuted = false
 
     @ObservationIgnored private var loadGeneration = 0
-    @ObservationIgnored private var currentLoad: (url: URL, startTime: TimeInterval?, autoplay: Bool)?
+    @ObservationIgnored private var currentLoad: (url: URL, headers: HTTPHeaders, startTime: TimeInterval?, autoplay: Bool)?
     @ObservationIgnored private var externalSubtitles: [ExternalSubtitle] = []
     @ObservationIgnored private var isResolvingBackend = false
 
@@ -133,24 +133,30 @@ public final class AVPlusPlayer {
     ///
     /// Returns once the backend is chosen and loading has started; observe ``status`` for the
     /// outcome. Calling `load` again supersedes a load that is still resolving.
-    public func load(_ url: URL, startTime: TimeInterval? = nil, autoplay: Bool = true) async {
+    ///
+    /// - Parameter headers: Request headers for media loaded over HTTP, such as `Authorization`.
+    ///   They are sent with every request for the media, including a stream's playlists,
+    ///   segments and keys.
+    public func load(_ url: URL, headers: [String: String] = [:], startTime: TimeInterval? = nil, autoplay: Bool = true) async {
+        let headers = HTTPHeaders(headers)
         loadGeneration += 1
         let generation = loadGeneration
         clearDocumentTracks()
         resetMediaState()
         self.url = url
-        currentLoad = (url, startTime, autoplay)
+        currentLoad = (url, headers, startTime, autoplay)
         externalSubtitles = []
         status = .loading
         isResolvingBackend = true
 
         let backend = await BackendResolver.resolve(
             url,
+            headers: headers,
             selection: configuration.backend,
             probeTimeout: configuration.probeTimeout
         )
         guard generation == loadGeneration else { return }
-        start(backend, url: url, startTime: startTime, autoplay: autoplay)
+        start(backend, url: url, headers: headers, startTime: startTime, autoplay: autoplay)
     }
 
     /// Stops playback and releases the backend.
@@ -455,7 +461,7 @@ public final class AVPlusPlayer {
 
     // MARK: - Engine management
 
-    private func start(_ backend: PlaybackBackend, url: URL, startTime: TimeInterval?, autoplay: Bool) {
+    private func start(_ backend: PlaybackBackend, url: URL, headers: HTTPHeaders, startTime: TimeInterval?, autoplay: Bool) {
         isResolvingBackend = false
         let engine: any PlaybackEngine
         do {
@@ -464,7 +470,7 @@ public final class AVPlusPlayer {
             status = .failed(error as? PlaybackError ?? PlaybackError(error.localizedDescription, backend: backend))
             return
         }
-        engine.load(url: url, startTime: startTime, autoplay: autoplay)
+        engine.load(url: url, headers: headers, startTime: startTime, autoplay: autoplay)
 
         for subtitle in externalSubtitles {
             Task {
@@ -553,7 +559,7 @@ public final class AVPlusPlayer {
             if beforeReady, let backend, shouldFallBackToMPV(from: backend), let currentLoad {
                 resetMediaState()
                 status = .loading
-                start(.mpv, url: currentLoad.url, startTime: currentLoad.startTime, autoplay: currentLoad.autoplay)
+                start(.mpv, url: currentLoad.url, headers: currentLoad.headers, startTime: currentLoad.startTime, autoplay: currentLoad.autoplay)
             } else {
                 status = .failed(error)
             }

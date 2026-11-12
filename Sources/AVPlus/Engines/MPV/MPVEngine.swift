@@ -18,6 +18,8 @@ final class MPVEngine: PlaybackEngine {
     private var lifecycleCancellables: Set<AnyCancellable> = []
 
     private var isReady = false
+    /// mpv's own user agent, restored when a load brings none.
+    private var defaultUserAgent: String?
     /// `sub-add` only works once a file is loaded.
     private var pendingSubtitleCommands: [[String]] = []
     private var temporarySubtitleFiles: [URL] = []
@@ -84,7 +86,8 @@ final class MPVEngine: PlaybackEngine {
 
     // MARK: - PlaybackEngine
 
-    func load(url: URL, startTime: TimeInterval?, autoplay: Bool) {
+    func load(url: URL, headers: HTTPHeaders, startTime: TimeInterval?, autoplay: Bool) {
+        apply(headers)
         isReady = false
         isAtEnd = false
         pendingSubtitleCommands = []
@@ -101,6 +104,19 @@ final class MPVEngine: PlaybackEngine {
         let status = handle.command(command)
         if status < 0 {
             emit(.failed(PlaybackError(Self.describe(status), backend: .mpv), beforeReady: true))
+        }
+    }
+
+    /// Sets the request headers for the next load, and clears those of the previous one. mpv hands
+    /// them to FFmpeg, which sends them with every request of a stream.
+    private func apply(_ headers: HTTPHeaders) {
+        if defaultUserAgent == nil { defaultUserAgent = handle.string("user-agent") ?? "" }
+        handle.set("user-agent", string: headers.userAgent ?? defaultUserAgent ?? "")
+        handle.set("referrer", string: headers.referer ?? "")
+        // `change-list` takes one item as it is, so values may contain commas.
+        handle.command(["change-list", "http-header-fields", "clr", ""])
+        for field in headers.others {
+            handle.command(["change-list", "http-header-fields", "append", "\(field.name): \(field.value)"])
         }
     }
 

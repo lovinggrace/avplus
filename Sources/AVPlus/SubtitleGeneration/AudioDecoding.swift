@@ -50,6 +50,7 @@ enum AudioDecoding {
     ///   Those tracks always go through FFmpeg, which can pick a channel.
     static func makeDecoder(
         url: URL,
+        headers: HTTPHeaders = HTTPHeaders([:]),
         trackIndex: Int?,
         sampleRate: Double,
         prefersCenterChannel: Bool = false
@@ -58,7 +59,7 @@ enum AudioDecoding {
         if BackendResolver.quickDecision(for: url) != .mpv {
             do {
                 return try await AssetReaderAudioDecoder.make(
-                    url: url, trackIndex: trackIndex, sampleRate: sampleRate, rejectsSurround: prefersCenterChannel
+                    url: url, headers: headers, trackIndex: trackIndex, sampleRate: sampleRate, rejectsSurround: prefersCenterChannel
                 )
             } catch {
                 // Not a failure to report if FFmpeg then succeeds or fails for its own reason.
@@ -67,7 +68,7 @@ enum AudioDecoding {
         }
         do {
             return try FFmpegAudioDecoder(
-                url: url, trackIndex: trackIndex, sampleRate: sampleRate, prefersCenterChannel: prefersCenterChannel
+                url: url, headers: headers, trackIndex: trackIndex, sampleRate: sampleRate, prefersCenterChannel: prefersCenterChannel
             )
         } catch {
             // Prefer AVFoundation's explanation when both failed, e.g. "no audio track".
@@ -98,11 +99,12 @@ final class AssetReaderAudioDecoder: AudioChunkDecoder, @unchecked Sendable {
 
     static func make(
         url: URL,
+        headers: HTTPHeaders = HTTPHeaders([:]),
         trackIndex: Int?,
         sampleRate: Double,
         rejectsSurround: Bool = false
     ) async throws -> AssetReaderAudioDecoder {
-        let asset = AVURLAsset(url: url)
+        let asset = AVURLAsset(url: url, options: headers.assetOptions)
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         let index = trackIndex ?? 0
         guard tracks.indices.contains(index) else { throw SubtitleGenerationError.noAudioTrack }
