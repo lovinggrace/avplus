@@ -99,6 +99,17 @@ struct PlaybackTests {
     }
 
     /// SRT and WebVTT added while the video is already playing, from text and from a file.
+    @Test func handsOverTheFrameMPVIsShowing() async throws {
+        let player = AVPlusPlayer(configuration: PlayerConfiguration(mpvOptions: headlessMPV))
+        defer { player.stop() }
+        await player.load(try fixture("sample.mkv"))
+        #expect(await waitUntil { player.status == .playing && player.currentTime > 0.2 })
+
+        let frame = try #require(player.mpvCurrentFrame())
+        let size = try #require(player.videoSize)
+        #expect(CGSize(width: frame.width, height: frame.height) == size)
+    }
+
     @Test(arguments: [PlaybackBackend.avFoundation, .mpv])
     func addsAndRemovesSubtitlesDuringPlayback(backend: PlaybackBackend) async throws {
         let selection: BackendSelection = backend == .mpv ? .mpv : .avFoundation

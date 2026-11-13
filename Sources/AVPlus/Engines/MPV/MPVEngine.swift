@@ -1,4 +1,5 @@
 import Combine
+import CoreGraphics
 import Foundation
 import Libmpv
 #if canImport(UIKit)
@@ -25,6 +26,7 @@ final class MPVEngine: PlaybackEngine {
     private var temporarySubtitleFiles: [URL] = []
     private var isPaused = true
     private var isAtEnd = false
+    private var resizeTask: Task<Void, Never>?
     private var videoWidth: Int64?
     private var videoHeight: Int64?
 
@@ -62,6 +64,7 @@ final class MPVEngine: PlaybackEngine {
             }
         }
         owner.engine = self
+        videoLayer.onResize = { owner.engine?.surfaceDidResize() }
 
         let observed: [(String, mpv_format)] = [
             ("time-pos", MPV_FORMAT_DOUBLE),
@@ -209,6 +212,37 @@ final class MPVEngine: PlaybackEngine {
     @discardableResult
     func command(_ arguments: [String]) -> Int32 {
         handle.command(arguments)
+    }
+
+    /// Makes mpv draw for the layer's new size.
+    ///
+    /// mpv's MoltenVK output reads the layer's size only when it configures itself for a video; it
+    /// has no notion of the layer changing size later. After a rotation or a window resize it
+    /// would keep laying the picture out for the old size: squashed, or small in a corner. The
+    /// output is configured again whenever the video's parameters change, so the aspect ratio is
+    /// changed by a hair and put back.
+    private func surfaceDidResize() {
+        resizeTask?.cancel()
+        resizeTask = Task { [weak self] in
+            // Once the size has settled, not for every step of an animation or a window drag.
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, let self, let width = self.videoWidth, let height = self.videoHeight,
+                  width > 0, height > 0 else { return }
+            let original = self.handle.string("video-aspect-override") ?? "-1"
+            self.handle.set("video-aspect-override", string: String(format: "%.6f", Double(width + 2) / Double(height)))
+            try? await Task.sleep(for: .milliseconds(150))
+            self.handle.set("video-aspect-override", string: original)
+        }
+    }
+
+    /// The video frame on screen, without subtitles. `nil` before a frame has been shown.
+    func currentFrame() -> CGImage? {
+        #if targetEnvironment(simulator)
+        // Reading a frame back from the simulator's Metal driver crashes inside MoltenVK.
+        return nil
+        #else
+        return handle.currentFrame()
+        #endif
     }
 
     /// Sets a raw mpv property from its string representation.

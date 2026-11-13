@@ -55,13 +55,20 @@ final class MPVMetalLayer: CAMetalLayer, @unchecked Sendable {
         super.init(coder: coder)
     }
 
+    /// Called on the main thread after `update` gave the drawable a different size.
+    var onResize: (@MainActor () -> Void)?
+
     /// Resizes the layer and its drawable without implicit animations.
+    @MainActor
     func update(bounds: CGRect, scale: CGFloat) {
+        let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        let changed = size != drawableSize && size.width > 1 && size.height > 1
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         frame = bounds
         contentsScale = scale
-        drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        drawableSize = size
         CATransaction.commit()
+        if changed { onResize?() }
     }
 }

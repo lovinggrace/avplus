@@ -454,6 +454,15 @@ public final class AVPlusPlayer {
         return engine.command(arguments) >= 0
     }
 
+    /// The video frame mpv is showing, without subtitles, at the video's own size.
+    ///
+    /// For media AVFoundation cannot read, where `AVAssetImageGenerator` is no help. Returns `nil`
+    /// unless the mpv backend is active and has shown a frame, and always in the iOS Simulator,
+    /// whose Metal driver cannot read frames back.
+    public func mpvCurrentFrame() -> CGImage? {
+        (engine as? MPVEngine)?.currentFrame()
+    }
+
     /// Sets a raw mpv property. Ignored unless the mpv backend is active.
     public func setMPVProperty(_ name: String, to value: String) {
         (engine as? MPVEngine)?.setProperty(name, value: value)

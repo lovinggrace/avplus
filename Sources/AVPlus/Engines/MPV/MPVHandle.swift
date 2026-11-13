@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Libmpv
 
@@ -69,6 +70,47 @@ final class MPVHandle: @unchecked Sendable {
             defer { cStrings.forEach { free(UnsafeMutablePointer(mutating: $0)) } }
             return mpv_command(pointer, &cStrings)
         } ?? MPV_ERROR_UNINITIALIZED.rawValue
+    }
+
+    /// The video frame on screen, without subtitles or on-screen display, at the video's own size.
+    ///
+    /// mpv hands over the pixels (`screenshot-raw`). Writing an image file with
+    /// `screenshot-to-file` is not an option: MPVKit's FFmpeg is built without image encoders.
+    func currentFrame() -> CGImage? {
+        withPointer { pointer -> CGImage? in
+            let arguments = ["screenshot-raw", "video", "bgr0"]
+            var cStrings: [UnsafePointer<CChar>?] = arguments.map { UnsafePointer(strdup($0)) }
+            cStrings.append(nil)
+            defer { cStrings.forEach { free(UnsafeMutablePointer(mutating: $0)) } }
+            var result = mpv_node()
+            guard mpv_command_ret(pointer, &cStrings, &result) >= 0 else { return nil }
+            defer { mpv_free_node_contents(&result) }
+            guard result.format == MPV_FORMAT_NODE_MAP, let list = result.u.list?.pointee,
+                  let keys = list.keys, let values = list.values else { return nil }
+            var width = 0, height = 0, stride = 0
+            var pixels: Data?
+            for index in 0..<Int(list.num) {
+                guard let key = keys[index] else { continue }
+                let value = values[index]
+                switch (String(cString: key), value.format) {
+                case ("w", MPV_FORMAT_INT64): width = Int(value.u.int64)
+                case ("h", MPV_FORMAT_INT64): height = Int(value.u.int64)
+                case ("stride", MPV_FORMAT_INT64): stride = Int(value.u.int64)
+                case ("data", MPV_FORMAT_BYTE_ARRAY):
+                    if let bytes = value.u.ba?.pointee, let data = bytes.data {
+                        pixels = Data(bytes: data, count: bytes.size)
+                    }
+                default: break
+                }
+            }
+            guard width > 0, height > 0, stride >= width * 4, let pixels, pixels.count >= stride * height,
+                  let provider = CGDataProvider(data: pixels as CFData) else { return nil }
+            // "bgr0": blue, green, red and an unused byte.
+            let layout = CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.noneSkipFirst.rawValue)
+            return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: stride,
+                           space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: layout, provider: provider,
+                           decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        } ?? nil
     }
 
     func observe(_ name: String, format: mpv_format) {
